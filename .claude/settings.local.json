@@ -1,0 +1,13 @@
+{
+  "permissions": {
+    "allow": [
+      "WebSearch",
+      "Bash(wc:*)",
+      "Bash(cd:*)",
+      "Bash(npm run:*)",
+      "Bash(__NEW_LINE_5174e5993bb1611a__ cp:*)",
+      "Bash(__NEW_LINE_5174e5993bb1611a__ echo:*)",
+      "Bash(dir *)"
+    ]
+  }
+}

@@ -1,0 +1,338 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>趣味班级点名</title>
+    <style>
+        :root {
+            --bg-gradient: linear-gradient(135deg, #a18cd1 0%, #fbc2eb 100%);
+            --card-bg: rgba(255, 255, 255, 0.95);
+            --primary-text: #6a11cb;
+            --btn-color: #48c774;
+            --btn-hover: #3ec46d;
+            
+            /* Pastel Colors for Chips */
+            --chip-pink: #ffc3a0;
+            --chip-blue: #a0e6ff;
+            --chip-yellow: #fff5a0;
+            --chip-green: #caffbf;
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            font-family: 'FZYaoti', '方正姚体', sans-serif;
+            background-image: var(--bg-gradient);
+            height: 100vh;
+            width: 100vw;
+            overflow: hidden;
+            display: flex;
+            flex-direction: column;
+            padding: 20px;
+            gap: 20px;
+        }
+
+        /* Top Section: Result Card */
+        .top-section {
+            flex: 0 0 auto;
+            background: var(--card-bg);
+            border-radius: 20px;
+            box-shadow: 0 10px 25px rgba(0,0,0,0.1);
+            padding: 20px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            text-align: center;
+            position: relative;
+            animation: fadeInDown 0.8s ease;
+        }
+
+        .congrats-text {
+            font-size: 1.2rem;
+            color: #ff6b6b;
+            margin-bottom: 5px;
+            opacity: 0;
+            transform: translateY(10px);
+            transition: all 0.3s ease;
+            height: 1.5rem; /* Reserve space */
+        }
+        
+        .congrats-text.show {
+            opacity: 1;
+            transform: translateY(0);
+        }
+
+        .selected-name {
+            font-size: 3.5rem;
+            font-weight: bold;
+            color: var(--primary-text);
+            margin: 10px 0 20px 0;
+            text-shadow: 2px 2px 0px rgba(0,0,0,0.05);
+            min-height: 4.5rem; /* Reserve space */
+            line-height: 1.2;
+        }
+
+        #start-btn {
+            background-color: var(--btn-color);
+            color: white;
+            border: none;
+            padding: 12px 40px;
+            font-size: 1.5rem;
+            border-radius: 50px; /* Pill shape */
+            cursor: pointer;
+            font-family: inherit;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            box-shadow: 0 4px 15px rgba(72, 199, 116, 0.4);
+            transition: all 0.2s ease;
+            outline: none;
+        }
+
+        #start-btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 6px 20px rgba(72, 199, 116, 0.6);
+        }
+
+        #start-btn:active {
+            transform: translateY(1px);
+        }
+
+        #start-btn.rolling {
+            background-color: #ff6b6b;
+            box-shadow: 0 4px 15px rgba(255, 107, 107, 0.4);
+        }
+
+        /* Bottom Section: Student List Container */
+        .bottom-section {
+            flex: 1;
+            background: var(--card-bg);
+            border-radius: 20px;
+            padding: 20px;
+            box-shadow: 0 10px 25px rgba(0,0,0,0.1);
+            overflow: hidden; /* Contains grid */
+            display: flex;
+            flex-direction: column;
+            animation: fadeInUp 0.8s ease;
+        }
+
+        .student-grid {
+            flex: 1;
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(80px, 1fr));
+            gap: 10px;
+            overflow-y: auto;
+            padding: 5px;
+            /* Custom Scrollbar */
+            scrollbar-width: thin;
+            scrollbar-color: #d1d1d1 transparent;
+        }
+
+        .student-grid::-webkit-scrollbar {
+            width: 6px;
+        }
+        .student-grid::-webkit-scrollbar-track {
+            background: transparent;
+        }
+        .student-grid::-webkit-scrollbar-thumb {
+            background-color: #d1d1d1;
+            border-radius: 10px;
+        }
+
+        /* Student Chips */
+        .student-chip {
+            border-radius: 15px;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            font-size: 1rem;
+            color: #555;
+            padding: 8px 5px;
+            cursor: default;
+            user-select: none;
+            transition: all 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+            position: relative;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.05);
+        }
+
+        /* Cycling Pastel Colors */
+        .student-chip:nth-child(4n+1) { background-color: var(--chip-pink); }
+        .student-chip:nth-child(4n+2) { background-color: var(--chip-blue); }
+        .student-chip:nth-child(4n+3) { background-color: var(--chip-yellow); }
+        .student-chip:nth-child(4n+4) { background-color: var(--chip-green); }
+
+        .student-chip:hover {
+            transform: translateY(-3px) scale(1.05);
+            z-index: 2;
+            box-shadow: 0 5px 15px rgba(0,0,0,0.1);
+        }
+
+        /* Active/Selected State */
+        .student-chip.active {
+            background-color: #FFD700 !important; /* Gold */
+            color: #fff;
+            font-weight: bold;
+            transform: scale(1.25);
+            z-index: 10;
+            box-shadow: 0 0 20px rgba(255, 215, 0, 0.6);
+            border: 2px solid #fff;
+        }
+
+        /* Temp highlight during rolling */
+        .student-chip.temp-highlight {
+            filter: brightness(0.9);
+            transform: scale(0.95);
+        }
+
+        /* Animations */
+        @keyframes fadeInDown {
+            from { opacity: 0; transform: translateY(-20px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+        @keyframes fadeInUp {
+            from { opacity: 0; transform: translateY(20px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+        @keyframes popIn {
+            0% { transform: scale(0.5); opacity: 0; }
+            80% { transform: scale(1.1); opacity: 1; }
+            100% { transform: scale(1); }
+        }
+
+        /* Responsive */
+        @media (max-width: 600px) {
+            .selected-name { font-size: 2.5rem; }
+            .student-grid { grid-template-columns: repeat(4, 1fr); }
+            #start-btn { font-size: 1.2rem; padding: 10px 30px; }
+        }
+    </style>
+</head>
+<body>
+
+    <div class="top-section">
+        <div class="congrats-text" id="congrats-msg">🎉 恭喜被选中！🎉</div>
+        <div class="selected-name" id="display-name">准备点名</div>
+        <button id="start-btn">
+            <span class="icon">▶</span> 开始点名
+        </button>
+    </div>
+
+    <div class="bottom-section">
+        <div class="student-grid" id="student-grid">
+            <!-- Chips Generated via JS -->
+        </div>
+    </div>
+
+    <script>
+        const students = [
+            "卞玥瑶", "陈相言", "陈星羽", "戴诗芮", "董洛", "高铭含", "顾茗浩", "韩依萌", "黄兆康", "蒋奕潇",
+            "金暻芊", "李昊轩", "李嘉和", "李木子", "李昕逸", "李一诺", "刘宸希", "刘静雅", "刘沐恒", "刘苏影",
+            "陆星辰", "罗修能", "马子宸", "潘珂悦", "彭昱鑫", "钱奕圩", "秦尔璐", "苏家乐", "孙浩钦", 
+            "孙漪霖", "谭皓予", "汤远", "滕子睿", "屠习恩", "王淼", "王书睿", "王文铮", "王欣琦", "王梓瑜",
+            "王子丞", "吴亦然", "武芮安", "相皓元", "徐晨霖", "徐若溪", "颜瑛梓", "杨明依", "杨子申",
+            "姚孟佳", "余悦闻", "袁炳轩", "岳昕宸", "张瀚之", "张家瑞", "张静姝", "张若琪", "张雨馨", "赵化瑞",
+            "赵苗林", "周珂汝", "朱子宁"
+        ];
+
+        const gridContainer = document.getElementById('student-grid');
+        const displayName = document.getElementById('display-name');
+        const startBtn = document.getElementById('start-btn');
+        const congratsMsg = document.getElementById('congrats-msg');
+        
+        let isRolling = false;
+        let rollTimer = null;
+        let gridElements = [];
+        let lastPickedIndices = [];
+        const MAX_HISTORY = 10;
+
+        // Initialize Grid
+        function initGrid() {
+            gridContainer.innerHTML = '';
+            gridElements = [];
+            students.forEach((name, index) => {
+                const chip = document.createElement('div');
+                chip.className = 'student-chip';
+                chip.textContent = name;
+                chip.dataset.index = index;
+                gridContainer.appendChild(chip);
+                gridElements.push(chip);
+            });
+        }
+
+        startBtn.addEventListener('click', () => {
+            if (isRolling) {
+                stopRoll();
+            } else {
+                startRoll();
+            }
+        });
+
+        function startRoll() {
+            isRolling = true;
+            startBtn.innerHTML = '<span class="icon">⏹</span> 停止';
+            startBtn.classList.add('rolling');
+            congratsMsg.classList.remove('show');
+            
+            // Clear previous active
+            const prevActive = document.querySelector('.student-chip.active');
+            if (prevActive) {
+                prevActive.classList.remove('active');
+                prevActive.textContent = prevActive.textContent.replace(' ⭐', '');
+            }
+
+            rollTimer = setInterval(() => {
+                // Random Name in Top Card
+                const rIndex = Math.floor(Math.random() * students.length);
+                displayName.textContent = students[rIndex];
+
+                // Visual Grid Effect (Optional: Randomly dim/highlight chips)
+                const randomChip = gridElements[Math.floor(Math.random() * gridElements.length)];
+                randomChip.classList.add('temp-highlight');
+                setTimeout(() => randomChip.classList.remove('temp-highlight'), 100);
+
+            }, 50);
+        }
+
+        function stopRoll() {
+            isRolling = false;
+            clearInterval(rollTimer);
+            startBtn.innerHTML = '<span class="icon">▶</span> 开始点名';
+            startBtn.classList.remove('rolling');
+
+            let winnerIndex;
+            let attempts = 0;
+            // Ensure recent winners are not picked again
+            do {
+                winnerIndex = Math.floor(Math.random() * students.length);
+                attempts++;
+            } while (lastPickedIndices.includes(winnerIndex) && attempts < 100);
+
+            // Update history
+            lastPickedIndices.push(winnerIndex);
+            if (lastPickedIndices.length > MAX_HISTORY) {
+                lastPickedIndices.shift();
+            }
+
+            const winnerName = students[winnerIndex];
+            const winnerChip = gridElements[winnerIndex];
+
+            displayName.textContent = winnerName;
+            congratsMsg.classList.add('show');
+
+            if (winnerChip) {
+                winnerChip.classList.add('active');
+                winnerChip.textContent = winnerName + ' ⭐';
+                winnerChip.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            }
+        }
+
+        initGrid();
+    </script>
+</body>
+</html>

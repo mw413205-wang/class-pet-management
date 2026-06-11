@@ -1,6 +1,8 @@
 <script setup lang="ts">
 import { ref } from 'vue'
 import { useRouter } from 'vue-router'
+import { authApi, storeAuth } from '@/services/api'
+import type { AuthResponse } from '@/services/api'
 
 const router = useRouter()
 const form = ref({
@@ -13,6 +15,7 @@ const showPassword = ref(false)
 const showConfirm = ref(false)
 const isLoading = ref(false)
 const errors = ref<Record<string, string>>({})
+const systemName = localStorage.getItem('system-name') || '班级宠物园'
 
 function validate() {
   errors.value = {}
@@ -51,9 +54,18 @@ async function handleRegister(e: Event) {
   e.preventDefault()
   if (!validate()) return
   isLoading.value = true
-  await new Promise(r => setTimeout(r, 1000))
-  isLoading.value = false
-  router.push('/')
+  try {
+    const response = await authApi<AuthResponse>('/auth/register', {
+      method: 'POST',
+      body: JSON.stringify(form.value),
+    })
+    storeAuth(response)
+    router.push('/dashboard')
+  } catch (error) {
+    errors.value.general = (error as Error).message
+  } finally {
+    isLoading.value = false
+  }
 }
 </script>
 
@@ -100,7 +112,7 @@ async function handleRegister(e: Event) {
             </div>
             <div>
               <h1 class="text-3xl font-bold mb-1" style="background: linear-gradient(to right, #ff6b9d, #4ecdc4); -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text;">
-                加入班级宠物园
+                加入{{ systemName }}
               </h1>
               <p class="text-sm text-[#a0a0a0]">创建你的专属教师账号</p>
             </div>
@@ -108,6 +120,7 @@ async function handleRegister(e: Event) {
 
           <!-- 注册表单 -->
           <form @submit="handleRegister" class="space-y-4">
+            <p v-if="errors.general" class="rounded-xl bg-red-50 px-3 py-2 text-sm text-red-500">{{ errors.general }}</p>
             <!-- 用户名 -->
             <div class="space-y-1">
               <label class="text-[#4a4a4a] flex items-center gap-2 text-sm font-medium">

@@ -1,13 +1,19 @@
 <script setup lang="ts">
-import { ref, computed, onUnmounted } from 'vue'
+import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { useThemeStore } from '@/stores/theme'
+import { useAppStore } from '@/stores/appStore'
+import { api, getStoredUser } from '@/services/api'
 
 const themeStore = useThemeStore()
+const appStore = useAppStore()
 const theme = computed(() => themeStore.theme)
+const isOwner = getStoredUser()?.role === 'owner'
 
 // ─── Prize Management ─────────────────────────────────────
 interface Prize {
-  id: number
+  id: string
+  source: 'independent' | 'shop'
+  sourceId: number
   name: string
   icon: string
   probability: number  // relative weight
@@ -15,83 +21,112 @@ interface Prize {
   inLottery: boolean
 }
 
-const prizes = ref<Prize[]>([
-  { id: 1, name: '铅笔一支', icon: '✏️', probability: 30, stock: -1, inLottery: true },
-  { id: 2, name: '橡皮一块', icon: '🧹', probability: 25, stock: -1, inLottery: true },
-  { id: 3, name: '笔记本', icon: '📓', probability: 20, stock: 5, inLottery: true },
-  { id: 4, name: '书签', icon: '🔖', probability: 15, stock: 10, inLottery: true },
-  { id: 5, name: '再来一次', icon: '🔄', probability: 10, stock: -1, inLottery: true },
-])
+const prizes = ref<Prize[]>([])
 
-const nextPrizeId = ref(100)
 const showPrizeManager = ref(false)
 const prizeForm = ref({ name: '', icon: '🎁', probability: 10, stock: -1 })
+const prizeSubmitting = ref(false)
 
-function addPrize() {
-  if (!prizeForm.value.name.trim()) return
-  prizes.value.push({
-    id: nextPrizeId.value++,
-    name: prizeForm.value.name.trim(),
-    icon: prizeForm.value.icon,
-    probability: Math.max(1, prizeForm.value.probability),
-    stock: prizeForm.value.stock,
-    inLottery: true,
-  })
-  prizeForm.value = { name: '', icon: '🎁', probability: 10, stock: -1 }
+interface LotteryBootstrap {
+  prizes: Prize[]
+  history: { id: number; prize: Pick<Prize, 'name' | 'icon'>; time: string }[]
 }
 
-function deletePrize(id: number) {
-  prizes.value = prizes.value.filter(p => p.id !== id)
+let lotteryRequestId = 0
+
+async function loadLottery() {
+  const requestId = ++lotteryRequestId
+  try {
+    const data = await api<LotteryBootstrap>('/lottery/bootstrap')
+    if (requestId !== lotteryRequestId) return
+    prizes.value = data.prizes
+    history.value = data.history
+  } catch (error) {
+    if (requestId !== lotteryRequestId) return
+    appStore.addToast(`奖池加载失败：${(error as Error).message}`, 'error')
+  }
+}
+
+onMounted(loadLottery)
+
+async function addPrize() {
+  if (!prizeForm.value.name.trim() || prizeSubmitting.value) return
+  try {
+    prizeSubmitting.value = true
+    await api('/lottery/prizes', {
+      method: 'POST',
+      body: JSON.stringify({
+        name: prizeForm.value.name.trim(),
+        icon: prizeForm.value.icon,
+        probability: Math.max(1, prizeForm.value.probability),
+        stock: prizeForm.value.stock,
+      }),
+    })
+    prizeForm.value = { name: '', icon: '🎁', probability: 10, stock: -1 }
+    await loadLottery()
+  } catch (error) {
+    appStore.addToast(`奖品保存失败：${(error as Error).message}`, 'error')
+  } finally {
+    prizeSubmitting.value = false
+  }
+}
+
+async function deletePrize(id: number) {
+  try {
+    await api(`/lottery/prizes/${id}`, { method: 'DELETE' })
+    await loadLottery()
+  } catch (error) {
+    appStore.addToast(`奖品删除失败：${(error as Error).message}`, 'error')
+  }
+}
+
+async function togglePrize(prize: Prize) {
+  if (prize.source !== 'independent') return
+  try {
+    await api(`/lottery/prizes/${prize.sourceId}`, {
+      method: 'PUT',
+      body: JSON.stringify({ inLottery: !prize.inLottery }),
+    })
+    await loadLottery()
+  } catch (error) {
+    appStore.addToast(`奖品状态保存失败：${(error as Error).message}`, 'error')
+  }
 }
 
 const activePrizes = computed(() => prizes.value.filter(p => p.inLottery && (p.stock === -1 || p.stock > 0)))
+const independentPrizes = computed(() => prizes.value.filter(p => p.source === 'independent'))
 
 // ─── Spinning wheel ───────────────────────────────────────
 const spinning = ref(false)
 const resultPrize = ref<Prize | null>(null)
 const showResult = ref(false)
 const spinDeg = ref(0)
-const history = ref<{ prize: Prize; time: string }[]>([])
+const history = ref<{ id?: number; prize: Pick<Prize, 'name' | 'icon'>; time: string }[]>([])
 
 let spinTimeout: ReturnType<typeof setTimeout> | null = null
 
-function pickWeighted(): Prize | null {
-  const pool = activePrizes.value
-  if (!pool.length) return null
-  const totalWeight = pool.reduce((sum, p) => sum + p.probability, 0)
-  let r = Math.random() * totalWeight
-  for (const p of pool) {
-    r -= p.probability
-    if (r <= 0) return p
-  }
-  return pool[pool.length - 1]
-}
-
-function spin() {
+async function spin() {
   if (spinning.value || activePrizes.value.length === 0) return
-  showResult.value = false
-  resultPrize.value = null
   spinning.value = true
+  try {
+    const winner = await api<Prize>('/lottery/draws', { method: 'POST' })
+    showResult.value = false
+    resultPrize.value = null
+    const winnerIdx = Math.max(0, activePrizes.value.findIndex(prize => prize.id === winner.id))
+    const segAngle = 360 / activePrizes.value.length
+    const targetAngle = 360 * 5 + (360 - winnerIdx * segAngle - segAngle / 2)
+    spinDeg.value += targetAngle + Math.random() * segAngle * 0.5
 
-  const winner = pickWeighted()!
-  const winnerIdx = activePrizes.value.indexOf(winner)
-  const segAngle = 360 / activePrizes.value.length
-  const targetAngle = 360 * 5 + (360 - winnerIdx * segAngle - segAngle / 2)
-  spinDeg.value += targetAngle + Math.random() * segAngle * 0.5
-
-  spinTimeout = setTimeout(() => {
+    spinTimeout = setTimeout(() => {
+      spinning.value = false
+      resultPrize.value = winner
+      showResult.value = true
+      void loadLottery()
+    }, 4000)
+  } catch (error) {
     spinning.value = false
-    resultPrize.value = winner
-    showResult.value = true
-    // Decrement stock
-    if (winner.stock > 0) winner.stock--
-    // Record history
-    history.value.unshift({
-      prize: winner,
-      time: new Date().toLocaleTimeString('zh', { hour: '2-digit', minute: '2-digit' }),
-    })
-    if (history.value.length > 20) history.value.pop()
-  }, 4000)
+    appStore.addToast(`抽奖失败：${(error as Error).message}`, 'error')
+  }
 }
 
 onUnmounted(() => {
@@ -110,7 +145,7 @@ const segColors = ['#4ecdc4', '#ff6b9d', '#ffd93d', '#96e6a1', '#ff9800', '#c445
         <span v-if="theme.enableEmojis" class="text-4xl animate-spin-slow">🎡</span>
         <h1 class="text-3xl font-bold" :class="theme.titleGradient">幸运抽奖</h1>
       </div>
-      <button @click="showPrizeManager = !showPrizeManager" class="px-3 py-2 text-sm font-medium transition-all" :class="[theme.cardBg, theme.cardBorder, theme.cardRounded, 'text-gray-600 hover:text-[#4ecdc4]']">
+      <button v-if="isOwner" @click="showPrizeManager = !showPrizeManager" class="px-3 py-2 text-sm font-medium transition-all" :class="[theme.cardBg, theme.cardBorder, theme.cardRounded, 'text-gray-600 hover:text-[#4ecdc4]']">
         🎁 管理奖品
       </button>
     </div>
@@ -131,7 +166,17 @@ const segColors = ['#4ecdc4', '#ff6b9d', '#ffd93d', '#96e6a1', '#ff9800', '#c445
           >
             <template v-if="activePrizes.length > 0">
               <template v-for="(prize, i) in activePrizes" :key="prize.id">
+                <circle
+                  v-if="activePrizes.length === 1"
+                  cx="100"
+                  cy="100"
+                  r="95"
+                  :fill="segColors[i % segColors.length]"
+                  stroke="white"
+                  stroke-width="1.5"
+                />
                 <path
+                  v-else
                   :d="(() => {
                     const n = activePrizes.length
                     const startAngle = (i / n) * 2 * Math.PI - Math.PI / 2
@@ -207,7 +252,8 @@ const segColors = ['#4ecdc4', '#ff6b9d', '#ffd93d', '#96e6a1', '#ff9800', '#c445
               <span class="text-[10px] text-gray-400">
                 {{ prize.stock === -1 ? '∞' : prize.stock + '个' }}
               </span>
-              <button @click="prize.inLottery = !prize.inLottery" class="w-7 h-4 rounded-full transition-all relative shrink-0" :class="prize.inLottery ? 'bg-[#4ecdc4]' : 'bg-gray-200'">
+              <span v-if="prize.source === 'shop'" class="shrink-0 text-[10px] text-[#c44569]">小卖部</span>
+              <button v-else-if="isOwner" @click="togglePrize(prize)" class="w-7 h-4 rounded-full transition-all relative shrink-0" :class="prize.inLottery ? 'bg-[#4ecdc4]' : 'bg-gray-200'">
                 <div class="absolute top-0.5 w-3 h-3 bg-white rounded-full shadow transition-all" :class="prize.inLottery ? 'left-3.5' : 'left-0.5'"></div>
               </button>
             </div>
@@ -240,14 +286,14 @@ const segColors = ['#4ecdc4', '#ff6b9d', '#ffd93d', '#96e6a1', '#ff9800', '#c445
 
           <!-- Existing prizes -->
           <div class="space-y-2 mb-4">
-            <div v-for="prize in prizes" :key="prize.id"
+            <div v-for="prize in independentPrizes" :key="prize.id"
               class="flex items-center gap-3 px-3 py-2 rounded-xl bg-gray-50"
             >
               <span class="text-xl">{{ prize.icon }}</span>
               <span class="flex-1 text-sm font-medium text-gray-700">{{ prize.name }}</span>
               <span class="text-xs text-gray-400">权重{{ prize.probability }}</span>
               <span class="text-xs text-gray-400">{{ prize.stock === -1 ? '不限' : prize.stock + '个' }}</span>
-              <button @click="deletePrize(prize.id)" class="text-gray-300 hover:text-red-400 transition-colors">🗑</button>
+              <button @click="deletePrize(prize.sourceId)" class="text-gray-300 hover:text-red-400 transition-colors">🗑</button>
             </div>
           </div>
 
@@ -268,7 +314,7 @@ const segColors = ['#4ecdc4', '#ff6b9d', '#ffd93d', '#96e6a1', '#ff9800', '#c445
                 <input type="number" v-model.number="prizeForm.stock" min="-1" class="w-full px-3 py-2 text-sm outline-none" :class="[theme.inputBg, theme.inputBorder, theme.inputRounded]" />
               </div>
             </div>
-            <button @click="addPrize" class="w-full py-2 rounded-xl text-white font-semibold transition-all" :class="theme.buttonPrimary">添加奖品</button>
+            <button @click="addPrize" :disabled="prizeSubmitting" class="w-full py-2 rounded-xl text-white font-semibold transition-all disabled:opacity-50" :class="theme.buttonPrimary">{{ prizeSubmitting ? '保存中...' : '添加奖品' }}</button>
           </div>
         </div>
       </div>

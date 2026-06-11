@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref } from 'vue'
 import { useRouter } from 'vue-router'
+import { authApi } from '@/services/api'
 
 const router = useRouter()
 const step = ref<1 | 2>(1)
@@ -27,9 +28,20 @@ async function handleVerify(e: Event) {
     return
   }
   isLoading.value = true
-  await new Promise(r => setTimeout(r, 800))
-  isLoading.value = false
-  step.value = 2
+  try {
+    await authApi('/auth/verify-reset', {
+      method: 'POST',
+      body: JSON.stringify({
+        username: form.value.username,
+        activationCode: form.value.activationCode,
+      }),
+    })
+    step.value = 2
+  } catch (error) {
+    errors.value.activationCode = (error as Error).message
+  } finally {
+    isLoading.value = false
+  }
 }
 
 async function handleReset(e: Event) {
@@ -44,9 +56,21 @@ async function handleReset(e: Event) {
     return
   }
   isLoading.value = true
-  await new Promise(r => setTimeout(r, 800))
-  isLoading.value = false
-  router.push('/')
+  try {
+    await authApi('/auth/forgot-password', {
+      method: 'POST',
+      body: JSON.stringify({
+        username: form.value.username,
+        activationCode: form.value.activationCode,
+        password: form.value.newPassword,
+      }),
+    })
+    router.push('/')
+  } catch (error) {
+    errors.value.newPassword = (error as Error).message
+  } finally {
+    isLoading.value = false
+  }
 }
 </script>
 

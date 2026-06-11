@@ -6,15 +6,20 @@
   "scripts": {
     "dev": "vite",
     "build": "vue-tsc -b && vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "test:xls": "node scripts/verify-xls-support.mjs",
+    "test:pets": "node scripts/verify-pet-assets.mjs",
+    "test:cosmetics": "node scripts/verify-cosmetic-assets.mjs"
   },
   "dependencies": {
     "@tailwindcss/vite": "^4.2.1",
     "@vueuse/core": "^14.2.1",
     "pinia": "^3.0.4",
+    "read-excel-file": "^9.0.10",
     "tailwindcss": "^4.2.1",
     "vue": "^3.5.30",
-    "vue-router": "^4.6.4"
+    "vue-router": "^4.6.4",
+    "xlsx": "https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz"
   },
   "devDependencies": {
     "@types/node": "^24.12.0",

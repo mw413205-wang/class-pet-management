@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, onUnmounted } from 'vue'
+import { ref, computed, onUnmounted, watch } from 'vue'
 import { useThemeStore } from '@/stores/theme'
 import { useAppStore } from '@/stores/appStore'
 import PetAvatar from '@/components/PetAvatar.vue'
@@ -34,7 +34,23 @@ const showResult = ref(false)
 
 let rollInterval: ReturnType<typeof setInterval> | null = null
 
+function stopRoll() {
+  if (rollInterval) clearInterval(rollInterval)
+  rollInterval = null
+  rolling.value = false
+}
+
+function shuffleStudents(students: Student[]) {
+  const shuffled = [...students]
+  for (let index = shuffled.length - 1; index > 0; index -= 1) {
+    const swapIndex = Math.floor(Math.random() * (index + 1))
+    ;[shuffled[index], shuffled[swapIndex]] = [shuffled[swapIndex], shuffled[index]]
+  }
+  return shuffled
+}
+
 function startRoll() {
+  if (rolling.value) return
   if (pool.value.length === 0) {
     appStore.addToast('没有可选学生了', 'warning')
     return
@@ -47,40 +63,38 @@ function startRoll() {
   const maxTicks = 30 + Math.floor(Math.random() * 20)
 
   rollInterval = setInterval(() => {
-    const shuffled = [...pool.value].sort(() => Math.random() - 0.5)
+    const shuffled = shuffleStudents(pool.value)
     displayStudents.value = shuffled.slice(0, count)
     tick++
     if (tick >= maxTicks) {
-      clearInterval(rollInterval!)
-      rolling.value = false
+      stopRoll()
       // Final pick
-      const shuffledFinal = [...pool.value].sort(() => Math.random() - 0.5)
+      const shuffledFinal = shuffleStudents(pool.value)
       finalStudents.value = shuffledFinal.slice(0, count)
       displayStudents.value = finalStudents.value
       showResult.value = true
       // Mark called
       finalStudents.value.forEach(s => calledIds.value.add(s.id))
-      // Trigger happy animation
-      finalStudents.value.forEach(s => {
-        const student = appStore.students.find(st => st.id === s.id)
-        if (student) {
-          student.animState = 'showing'
-          setTimeout(() => { student.animState = 'idle' }, 1600)
-        }
-      })
     }
   }, 80)
 }
 
 function resetCalled() {
+  stopRoll()
   calledIds.value.clear()
   showResult.value = false
   displayStudents.value = []
   finalStudents.value = []
 }
 
+watch(() => appStore.currentClassId, () => {
+  filterGroupId.value = 'all'
+  pickCount.value = 1
+  resetCalled()
+})
+
 onUnmounted(() => {
-  if (rollInterval) clearInterval(rollInterval)
+  stopRoll()
 })
 
 const levelColors = ['#a0a0a0', '#4ecdc4', '#ffd93d', '#ff9800', '#ffd700']
@@ -99,6 +113,13 @@ const levelColors = ['#a0a0a0', '#4ecdc4', '#ffd93d', '#ff9800', '#ffd700']
       <div class="space-y-4">
         <div :class="[theme.cardBg, theme.cardBorder, theme.cardRounded, 'p-4 shadow-sm space-y-4']">
           <h3 class="font-semibold text-gray-700">⚙️ 配置</h3>
+
+          <div>
+            <label class="text-xs text-gray-500 mb-1.5 block">当前班级</label>
+            <select v-model="appStore.currentClassId" class="w-full px-3 py-2 text-sm outline-none" :class="[theme.inputBg, theme.inputBorder, theme.inputRounded]">
+              <option v-for="cls in appStore.classes" :key="cls.id" :value="cls.id">{{ cls.name }}</option>
+            </select>
+          </div>
 
           <!-- Group filter -->
           <div>

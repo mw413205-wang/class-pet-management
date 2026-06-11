@@ -1,11 +1,12 @@
 <script setup lang="ts">
-import { ref, computed } from 'vue'
+import { ref, computed, watch } from 'vue'
 import { useThemeStore } from '@/stores/theme'
 import { useAppStore } from '@/stores/appStore'
 import PetAvatar from '@/components/PetAvatar.vue'
-import { PETS, PET_CATEGORIES, getPetById } from '@/data/petData'
-import { COSMETICS, COSMETIC_TYPE_LABELS } from '@/data/cosmeticData'
-import type { Student } from '@/types'
+import { PETS, PET_CATEGORIES, getPetById, getPetCatalogStats, getPetImageUrl } from '@/data/petData'
+import { COSMETICS, COSMETIC_TYPE_LABELS, getCosmeticAssetUrl, getCosmeticStats } from '@/data/cosmeticData'
+import type { CosmeticType, Student } from '@/types'
+import { api } from '@/services/api'
 
 const themeStore = useThemeStore()
 const theme = computed(() => themeStore.theme)
@@ -17,11 +18,27 @@ const activeTab = ref<Tab>('catalog')
 
 // ─── Pet Catalog ──────────────────────────────────────────
 const catalogCategory = ref('全部')
+const catalogImageFailures = ref(new Set<string>())
+const catalogStats = computed(() => getPetCatalogStats())
 
 const filteredPets = computed(() => {
   if (catalogCategory.value === '全部') return PETS
   return PETS.filter(p => p.category === catalogCategory.value)
 })
+
+function getCatalogImageKey(petId: string, stageIndex: number) {
+  return `${petId}:${stageIndex}`
+}
+
+function markCatalogImageFailed(petId: string, stageIndex: number) {
+  const next = new Set(catalogImageFailures.value)
+  next.add(getCatalogImageKey(petId, stageIndex))
+  catalogImageFailures.value = next
+}
+
+function canShowCatalogImage(petId: string, stageIndex: number) {
+  return !catalogImageFailures.value.has(getCatalogImageKey(petId, stageIndex))
+}
 
 // ─── Student Pet Status ───────────────────────────────────
 const searchQuery = ref('')
@@ -38,13 +55,15 @@ const studentsWithPets = computed(() => {
 const studentsNoPet = computed(() => appStore.currentStudents.filter(s => !s.petId))
 
 function assignRandomPet(student: Student) {
+  if (!PETS.length) return
   const pet = PETS[Math.floor(Math.random() * PETS.length)]
   appStore.assignPet(student.id, pet.id)
 }
 
 function assignAllNoPet() {
-  studentsNoPet.value.forEach(s => assignRandomPet(s))
-  appStore.addToast(`已为 ${studentsNoPet.value.length} 名学生随机分配宠物`, 'success')
+  const students = [...studentsNoPet.value]
+  students.forEach(s => assignRandomPet(s))
+  appStore.addToast(`正在为 ${students.length} 名学生随机分配宠物`, 'info')
 }
 
 // ─── Pet assignment modal ─────────────────────────────────
@@ -53,6 +72,7 @@ const assignTarget = ref<Student | null>(null)
 const assignPetId = ref<string | null>(null)
 const assignNickname = ref('')
 const assignPetCategory = ref('全部')
+const canAssignTargetPet = computed(() => !assignTarget.value || appStore.canChangeStudentPet(assignTarget.value))
 
 function openAssignModal(s: Student) {
   assignTarget.value = s
@@ -64,10 +84,7 @@ function openAssignModal(s: Student) {
 
 function submitAssign() {
   if (!assignTarget.value) return
-  if (assignPetId.value) {
-    appStore.assignPet(assignTarget.value.id, assignPetId.value)
-  }
-  appStore.assignPetNickname(assignTarget.value.id, assignNickname.value)
+  appStore.savePetDetails(assignTarget.value.id, assignPetId.value, assignNickname.value)
   showAssignModal.value = false
 }
 
@@ -77,7 +94,8 @@ const filteredAssignPets = computed(() => {
 })
 
 // ─── Dressing Room ────────────────────────────────────────
-const dressingStudent = ref<Student | null>(null)
+const dressingStudentId = ref<number | null>(null)
+const dressingStudent = computed(() => appStore.students.find(student => student.id === dressingStudentId.value) ?? null)
 const dressingSearchQuery = ref('')
 
 const dressingStudents = computed(() => {
@@ -90,10 +108,13 @@ const dressingStudents = computed(() => {
 })
 
 const activeCosmeticType = ref<'toy' | 'head' | 'back' | 'neck' | 'face'>('head')
-const cosmeticsByType = computed(() => COSMETICS.filter(c => c.type === activeCosmeticType.value))
+const ownedCosmeticIds = ref(new Set<string>())
+const cosmeticInventoryLoading = ref(false)
+const cosmeticsByType = computed(() => COSMETICS.filter(c => c.type === activeCosmeticType.value && ownedCosmeticIds.value.has(c.id)))
+const cosmeticStats = computed(() => getCosmeticStats())
 
 type CosmeticTypeKey = keyof Student['cosmetics']
-const cosmeticTypeToKey: Record<'toy' | 'head' | 'back' | 'neck' | 'face', CosmeticTypeKey> = {
+const cosmeticTypeToKey: Record<CosmeticType, CosmeticTypeKey> = {
   toy: 'toyId', head: 'headId', back: 'backId', neck: 'neckId', face: 'faceId',
 }
 
@@ -106,10 +127,35 @@ function equipCosmetic(cosmeticId: string) {
 
 function removeAllCosmetics() {
   if (!dressingStudent.value) return
-  const keys = Object.values(cosmeticTypeToKey) as CosmeticTypeKey[]
-  keys.forEach(k => appStore.equipCosmetic(dressingStudent.value!.id, k, null))
-  appStore.addToast('已卸下所有装扮', 'info')
+  appStore.removeAllCosmetics(dressingStudent.value.id)
 }
+
+interface StudentCosmeticInventoryItem {
+  cosmeticId: string
+}
+
+async function selectDressingStudent(student: Student) {
+  dressingStudentId.value = student.id
+  ownedCosmeticIds.value = new Set()
+  cosmeticInventoryLoading.value = true
+  try {
+    const inventory = await api<StudentCosmeticInventoryItem[]>(`/students/${student.id}/cosmetics`)
+    if (dressingStudentId.value !== student.id) return
+    ownedCosmeticIds.value = new Set(inventory.map(item => item.cosmeticId))
+  } catch (error) {
+    if (dressingStudentId.value !== student.id) return
+    appStore.addToast(`装扮库存加载失败：${(error as Error).message}`, 'error')
+  } finally {
+    if (dressingStudentId.value === student.id) cosmeticInventoryLoading.value = false
+  }
+}
+
+watch(() => appStore.currentClassId, () => {
+  showAssignModal.value = false
+  assignTarget.value = null
+  dressingStudentId.value = null
+  ownedCosmeticIds.value = new Set()
+})
 
 const levelColors = ['#a0a0a0', '#4ecdc4', '#ffd93d', '#ff9800', '#ffd700']
 </script>
@@ -135,6 +181,25 @@ const levelColors = ['#a0a0a0', '#4ecdc4', '#ffd93d', '#ff9800', '#ffd700']
 
     <!-- ─── Pet Catalog ─── -->
     <div v-if="activeTab === 'catalog'" class="space-y-4">
+      <div class="grid grid-cols-2 gap-3 md:grid-cols-4">
+        <div :class="[theme.cardBg, theme.cardBorder, theme.cardRounded, 'p-4 shadow-sm']">
+          <div class="text-xs font-semibold text-gray-400">已配置宠物</div>
+          <div class="mt-1 text-2xl font-black text-gray-800">{{ catalogStats.total }}</div>
+        </div>
+        <div :class="[theme.cardBg, theme.cardBorder, theme.cardRounded, 'p-4 shadow-sm']">
+          <div class="text-xs font-semibold text-gray-400">完整图片素材</div>
+          <div class="mt-1 text-2xl font-black text-[#4ecdc4]">{{ catalogStats.imaged }}</div>
+        </div>
+        <div :class="[theme.cardBg, theme.cardBorder, theme.cardRounded, 'p-4 shadow-sm']">
+          <div class="text-xs font-semibold text-gray-400">分类数量</div>
+          <div class="mt-1 text-2xl font-black text-[#ff9800]">{{ catalogStats.categories }}</div>
+        </div>
+        <div :class="[theme.cardBg, theme.cardBorder, theme.cardRounded, 'p-4 shadow-sm']">
+          <div class="text-xs font-semibold text-gray-400">目标宠物数</div>
+          <div class="mt-1 text-2xl font-black text-gray-800">{{ catalogStats.target }}</div>
+        </div>
+      </div>
+
       <!-- Category filter -->
       <div class="flex gap-2 flex-wrap">
         <button
@@ -151,21 +216,47 @@ const levelColors = ['#a0a0a0', '#4ecdc4', '#ffd93d', '#ff9800', '#ffd700']
         <div
           v-for="pet in filteredPets"
           :key="pet.id"
-          class="p-4 flex flex-col items-center gap-2 hover:shadow-lg transition-all duration-200 hover:-translate-y-1"
+          class="p-4 flex flex-col items-center gap-3 hover:shadow-lg transition-all duration-200 hover:-translate-y-1"
           :class="[theme.cardBg, theme.cardBorder, theme.cardRounded, 'shadow-sm']"
         >
           <div
-            class="w-20 h-20 rounded-2xl flex items-center justify-center text-5xl"
+            class="h-28 w-full rounded-xl flex items-center justify-center overflow-hidden"
             :style="{ background: pet.baseColor + '22' }"
-          >{{ pet.emoji }}</div>
-          <div class="text-sm font-bold text-gray-800 text-center">{{ pet.name }}</div>
-          <div class="text-xs px-2 py-0.5 rounded-full font-medium" :style="{ background: pet.baseColor + '22', color: pet.baseColor }">{{ pet.category }}</div>
+          >
+            <img
+              v-if="pet.hasImage && canShowCatalogImage(pet.id, 4)"
+              :src="getPetImageUrl(pet.id, 4)"
+              :alt="`${pet.name}满级形态`"
+              class="h-full w-full object-contain p-2 drop-shadow-md"
+              draggable="false"
+              @error="markCatalogImageFailed(pet.id, 4)"
+            />
+            <span v-else class="text-5xl">{{ pet.emoji }}</span>
+          </div>
+          <div class="text-center">
+            <div class="text-sm font-bold text-gray-800">{{ pet.name }}</div>
+            <div class="mt-1 text-xs px-2 py-0.5 rounded-full font-medium" :style="{ background: pet.baseColor + '22', color: pet.baseColor }">{{ pet.category }}</div>
+          </div>
           <!-- Stages -->
-          <div class="w-full space-y-1">
-            <div v-for="(stage, i) in pet.stages" :key="i" class="flex items-center gap-1.5">
-              <div class="w-2 h-2 rounded-full shrink-0" :style="{ background: levelColors[i] }"></div>
-              <span class="text-xs text-gray-500">{{ stage }}</span>
-              <span class="ml-auto text-xs text-gray-300">Lv.{{ i + 1 }}</span>
+          <div class="grid w-full grid-cols-5 gap-1.5">
+            <div
+              v-for="(stage, i) in pet.stages"
+              :key="stage"
+              class="flex min-w-0 flex-col items-center gap-1"
+              :title="`Lv.${i + 1} ${stage}`"
+            >
+              <div class="h-9 w-full rounded-lg bg-gray-50 flex items-center justify-center overflow-hidden">
+                <img
+                  v-if="pet.hasImage && canShowCatalogImage(pet.id, i)"
+                  :src="getPetImageUrl(pet.id, i)"
+                  :alt="stage"
+                  class="h-full w-full object-contain p-0.5"
+                  draggable="false"
+                  @error="markCatalogImageFailed(pet.id, i)"
+                />
+                <span v-else class="text-lg">{{ pet.emoji }}</span>
+              </div>
+              <span class="text-[10px] font-semibold leading-none" :style="{ color: levelColors[i] }">Lv.{{ i + 1 }}</span>
             </div>
           </div>
         </div>
@@ -231,7 +322,7 @@ const levelColors = ['#a0a0a0', '#4ecdc4', '#ffd93d', '#ff9800', '#ffd700']
             <button
               v-for="s in dressingStudents"
               :key="s.id"
-              @click="dressingStudent = s"
+              @click="selectDressingStudent(s)"
               class="w-full flex items-center gap-2 px-3 py-2 rounded-xl text-sm transition-all"
               :class="dressingStudent?.id === s.id
                 ? 'bg-[#4ecdc4]/15 text-[#2a9d8f] font-semibold ring-1 ring-[#4ecdc4]'
@@ -245,6 +336,21 @@ const levelColors = ['#a0a0a0', '#4ecdc4', '#ffd93d', '#ff9800', '#ffd700']
 
         <!-- Dressing panel -->
         <div v-if="dressingStudent" class="flex-1 space-y-4">
+          <div class="grid grid-cols-3 gap-3">
+            <div :class="[theme.cardBg, theme.cardBorder, theme.cardRounded, 'p-3 shadow-sm']">
+              <div class="text-xs font-semibold text-gray-400">装扮配置</div>
+              <div class="mt-1 text-xl font-black text-gray-800">{{ cosmeticStats.total }}</div>
+            </div>
+            <div :class="[theme.cardBg, theme.cardBorder, theme.cardRounded, 'p-3 shadow-sm']">
+              <div class="text-xs font-semibold text-gray-400">图片素材</div>
+              <div class="mt-1 text-xl font-black text-[#4ecdc4]">{{ cosmeticStats.imaged }}</div>
+            </div>
+            <div :class="[theme.cardBg, theme.cardBorder, theme.cardRounded, 'p-3 shadow-sm']">
+              <div class="text-xs font-semibold text-gray-400">装扮层级</div>
+              <div class="mt-1 text-xl font-black text-[#ff9800]">{{ cosmeticStats.types }}</div>
+            </div>
+          </div>
+
           <!-- Preview -->
           <div :class="[theme.cardBg, theme.cardBorder, theme.cardRounded, 'p-6 flex flex-col items-center gap-3 shadow-sm']">
             <PetAvatar :student="dressingStudent" size="xl" :show-level="true" :show-score="true" />
@@ -258,7 +364,7 @@ const levelColors = ['#a0a0a0', '#4ecdc4', '#ffd93d', '#ff9800', '#ffd700']
             <button
               v-for="(label, type) in COSMETIC_TYPE_LABELS"
               :key="type"
-              @click="activeCosmeticType = type as 'toy' | 'head' | 'back' | 'neck' | 'face'"
+              @click="activeCosmeticType = type as CosmeticType"
               class="px-3 py-1.5 rounded-xl text-xs font-semibold transition-all"
               :class="activeCosmeticType === type ? 'bg-white shadow text-[#4ecdc4]' : 'text-gray-500 hover:text-gray-700'"
             >{{ label }}</button>
@@ -287,10 +393,21 @@ const levelColors = ['#a0a0a0', '#4ecdc4', '#ffd93d', '#ff9800', '#ffd700']
                 ? 'bg-[#4ecdc4]/20 ring-2 ring-[#4ecdc4]'
                 : 'bg-gray-50 hover:bg-gray-100'"
             >
-              <span class="text-3xl">{{ item.icon }}</span>
+              <span class="flex h-10 w-10 items-center justify-center rounded-lg bg-white text-3xl shadow-sm">
+                <img
+                  v-if="item.assetPath"
+                  :src="getCosmeticAssetUrl(item)"
+                  :alt="item.name"
+                  class="h-full w-full object-contain p-1"
+                  draggable="false"
+                />
+                <span v-else>{{ item.icon }}</span>
+              </span>
               <span class="text-xs text-gray-600 text-center">{{ item.name }}</span>
             </button>
           </div>
+          <div v-if="cosmeticInventoryLoading" class="py-3 text-sm text-gray-400">正在加载装扮库存...</div>
+          <div v-else-if="!cosmeticsByType.length" class="py-3 text-sm text-gray-400">该分类暂无已兑换装扮</div>
         </div>
 
         <!-- No student selected -->
@@ -323,10 +440,12 @@ const levelColors = ['#a0a0a0', '#4ecdc4', '#ffd93d', '#ff9800', '#ffd700']
           </div>
 
           <!-- Pet grid -->
+          <p v-if="!canAssignTargetPet" class="mb-3 rounded-lg bg-orange-50 px-3 py-2 text-xs text-orange-600">该学生已有成长积分，请先重置积分或在系统设置中允许更换宠物。仍可修改宠物昵称。</p>
           <div class="grid grid-cols-4 gap-2 mb-4 max-h-48 overflow-y-auto">
             <button
               @click="assignPetId = null"
-              class="flex flex-col items-center p-2 rounded-xl transition-all hover:scale-105"
+              :disabled="!canAssignTargetPet"
+              class="flex flex-col items-center p-2 rounded-xl transition-all hover:scale-105 disabled:cursor-not-allowed disabled:opacity-50"
               :class="assignPetId === null ? 'bg-gray-200 ring-2 ring-gray-400' : 'bg-gray-50 hover:bg-gray-100'"
             >
               <span class="text-2xl">🐾</span>
@@ -336,7 +455,8 @@ const levelColors = ['#a0a0a0', '#4ecdc4', '#ffd93d', '#ff9800', '#ffd700']
               v-for="pet in filteredAssignPets"
               :key="pet.id"
               @click="assignPetId = pet.id"
-              class="flex flex-col items-center p-2 rounded-xl transition-all hover:scale-105"
+              :disabled="!canAssignTargetPet"
+              class="flex flex-col items-center p-2 rounded-xl transition-all hover:scale-105 disabled:cursor-not-allowed disabled:opacity-50"
               :class="assignPetId === pet.id ? 'bg-[#4ecdc4]/20 ring-2 ring-[#4ecdc4]' : 'bg-gray-50 hover:bg-gray-100'"
             >
               <span class="text-2xl">{{ pet.emoji }}</span>

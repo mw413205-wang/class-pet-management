@@ -1,6 +1,8 @@
 <script setup lang="ts">
 import { ref } from 'vue'
 import { useRouter } from 'vue-router'
+import { authApi, storeAuth } from '@/services/api'
+import type { AuthResponse } from '@/services/api'
 
 const router = useRouter()
 const username = ref('')
@@ -8,6 +10,8 @@ const password = ref('')
 const showPassword = ref(false)
 const rememberMe = ref(false)
 const isLoading = ref(false)
+const loginError = ref('')
+const systemName = localStorage.getItem('system-name') || '班级宠物园'
 
 // 随机星星位置
 const stars = Array.from({ length: 8 }, (_, i) => ({
@@ -33,10 +37,22 @@ async function handleLogin(e: Event) {
   e.preventDefault()
   if (!username.value || !password.value) return
   isLoading.value = true
-  // 模拟登录
-  await new Promise(r => setTimeout(r, 800))
-  isLoading.value = false
-  router.push('/dashboard')
+  loginError.value = ''
+  try {
+    const response = await authApi<AuthResponse>('/auth/login', {
+      method: 'POST',
+      body: JSON.stringify({ username: username.value, password: password.value, remember: rememberMe.value }),
+    })
+    storeAuth(response, rememberMe.value)
+    const redirect = typeof router.currentRoute.value.query.redirect === 'string'
+      ? router.currentRoute.value.query.redirect
+      : '/dashboard'
+    router.push(redirect)
+  } catch (error) {
+    loginError.value = (error as Error).message
+  } finally {
+    isLoading.value = false
+  }
 }
 </script>
 
@@ -131,7 +147,7 @@ async function handleLogin(e: Event) {
                 </div>
               </div>
               <div>
-                <h1 class="text-4xl font-bold text-gradient mb-2">班级宠物园</h1>
+                <h1 class="text-4xl font-bold text-gradient mb-2">{{ systemName }}</h1>
                 <div class="inline-flex items-center gap-2 bg-gradient-to-r from-[#ffe5d9] to-[#ffd9e8] px-4 py-2 rounded-full">
                   <span class="text-sm text-[#ff6b6b]">✨ 教师管理平台 ✨</span>
                 </div>
@@ -140,6 +156,7 @@ async function handleLogin(e: Event) {
 
             <!-- 登录表单 -->
             <form @submit="handleLogin" class="space-y-5">
+              <p v-if="loginError" class="rounded-xl bg-red-50 px-3 py-2 text-sm text-red-500">{{ loginError }}</p>
               <!-- 用户名 -->
               <div class="space-y-2">
                 <label class="text-[#4a4a4a] flex items-center gap-2 text-sm font-medium">
@@ -231,7 +248,7 @@ async function handleLogin(e: Event) {
             <div class="text-center pt-4 border-t-2 border-[#ffe5d9]">
               <div class="flex items-center justify-center gap-2 text-sm text-[#a0a0a0]">
                 <span class="text-[#ff6b9d]">💖</span>
-                <p>© 2026 班级宠物园 · 让教育更有爱</p>
+                <p>© 2026 {{ systemName }} · 让教育更有爱</p>
                 <span class="text-[#ffd93d]">✨</span>
               </div>
             </div>

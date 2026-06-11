@@ -1,28 +1,76 @@
 <script setup lang="ts">
-import { ref, computed } from 'vue'
-import { useThemeStore } from '@/stores/theme'
+import { ref, computed, watch } from 'vue'
+import { useRouter } from 'vue-router'
+import { themeColorOptions, useThemeStore } from '@/stores/theme'
 import { useAppStore } from '@/stores/appStore'
+import type { ResetMode } from '@/stores/appStore'
+import { api, clearAuth, getStoredUser } from '@/services/api'
 import type { ScoreRule } from '@/types'
 
 const themeStore = useThemeStore()
 const theme = computed(() => themeStore.theme)
 const appStore = useAppStore()
+const router = useRouter()
+const currentUser = getStoredUser()
+const isOwner = currentUser?.role === 'owner'
+
+// ─── Basic settings ──────────────────────────────────────
+const systemNameDraft = ref(appStore.systemName)
+
+watch(() => appStore.systemName, name => {
+  systemNameDraft.value = name
+})
+
+async function saveSystemName() {
+  const name = systemNameDraft.value.trim()
+  if (!name || name.length > 30) {
+    appStore.addToast('系统名称需为 1-30 个字符', 'warning')
+    return
+  }
+  await appStore.saveSystemName(name)
+}
+
+async function toggleNotificationReminders() {
+  if (themeStore.notificationsEnabled) {
+    themeStore.setNotificationsEnabled(false)
+    appStore.addToast('浏览器通知提醒已关闭', 'info')
+    return
+  }
+  if (!('Notification' in window)) {
+    appStore.addToast('当前浏览器不支持系统通知', 'warning')
+    return
+  }
+  const permission = Notification.permission === 'default'
+    ? await Notification.requestPermission()
+    : Notification.permission
+  if (permission !== 'granted') {
+    appStore.addToast('浏览器未授予通知权限', 'warning')
+    return
+  }
+  themeStore.setNotificationsEnabled(true)
+  appStore.addToast('浏览器通知提醒已开启', 'success')
+}
+
+function toggleAnimationsPreference() {
+  themeStore.setAnimationsEnabled(!themeStore.animationsEnabled)
+  appStore.addToast('动画偏好已保存；当前版本仍保持静态展示', 'info')
+}
 
 // ─── Score Rules ──────────────────────────────────────────
 const ruleModalMode = ref<'add' | 'edit' | null>(null)
 const targetRule = ref<ScoreRule | null>(null)
-const ruleForm = ref({ name: '', icon: '⭐', value: 1 })
+const ruleForm = ref({ name: '', icon: '⭐', value: 1, isQuick: false })
 
 const COMMON_ICONS = ['⭐', '✋', '📝', '🤝', '👂', '🎯', '💡', '🏆', '❌', '⚠️', '😴', '🎮', '📚', '🌟', '🎨', '🔥']
 
 function openAddRule() {
-  ruleForm.value = { name: '', icon: '⭐', value: 1 }
+  ruleForm.value = { name: '', icon: '⭐', value: 1, isQuick: false }
   targetRule.value = null
   ruleModalMode.value = 'add'
 }
 
 function openEditRule(rule: ScoreRule) {
-  ruleForm.value = { name: rule.name, icon: rule.icon, value: rule.value }
+  ruleForm.value = { name: rule.name, icon: rule.icon, value: rule.value, isQuick: rule.isQuick }
   targetRule.value = rule
   ruleModalMode.value = 'edit'
 }
@@ -48,41 +96,143 @@ function startEditThresholds() {
 }
 
 function saveThresholds() {
-  // Sort & validate
-  const sorted = [...thresholdDraft.value].map(Number).sort((a, b) => a - b)
-  if (sorted.some(v => isNaN(v) || v <= 0)) {
-    appStore.addToast('阈值必须为正整数', 'warning')
+  const values = [...thresholdDraft.value].map(Number)
+  if (values.length !== 4 || values.some(v => !Number.isInteger(v) || v <= 0) || values.some((value, index) => index > 0 && value <= values[index - 1])) {
+    appStore.addToast('阈值必须为四个递增的正整数', 'warning')
     return
   }
-  appStore.levelThresholds.splice(0, 4, ...sorted)
+  appStore.saveLevelThresholds(values)
   thresholdEditing.value = false
-  appStore.addToast('等级阈值已更新', 'success')
 }
 
 function cancelEditThresholds() {
   thresholdEditing.value = false
 }
 
+// ─── Account settings ─────────────────────────────────────
+const passwordSubmitting = ref(false)
+const passwordForm = ref({ currentPassword: '', newPassword: '', confirmPassword: '' })
+
+async function changePassword() {
+  if (passwordSubmitting.value) return
+  if (!passwordForm.value.currentPassword) {
+    appStore.addToast('请输入当前密码', 'warning')
+    return
+  }
+  if (!/^(?=.*[a-z])(?=.*[A-Z])(?=.*\d).{8,20}$/.test(passwordForm.value.newPassword)) {
+    appStore.addToast('新密码需为 8-20 位，并包含大小写字母和数字', 'warning')
+    return
+  }
+  if (passwordForm.value.newPassword !== passwordForm.value.confirmPassword) {
+    appStore.addToast('两次输入的新密码不一致', 'warning')
+    return
+  }
+  try {
+    passwordSubmitting.value = true
+    await api('/auth/change-password', {
+      method: 'POST',
+      body: JSON.stringify({
+        currentPassword: passwordForm.value.currentPassword,
+        newPassword: passwordForm.value.newPassword,
+      }),
+    })
+    passwordForm.value = { currentPassword: '', newPassword: '', confirmPassword: '' }
+    appStore.addToast('密码已更新，请在下次登录时使用新密码', 'success')
+  } catch (error) {
+    appStore.addToast(`密码修改失败：${(error as Error).message}`, 'warning')
+  } finally {
+    passwordSubmitting.value = false
+  }
+}
+
+const showDeactivateConfirm = ref(false)
+const deactivateSubmitting = ref(false)
+const deactivateForm = ref({ password: '', confirmation: '' })
+
+function openDeactivateConfirm() {
+  deactivateForm.value = { password: '', confirmation: '' }
+  showDeactivateConfirm.value = true
+}
+
+function closeDeactivateConfirm() {
+  if (!deactivateSubmitting.value) showDeactivateConfirm.value = false
+}
+
+async function deactivateAccount() {
+  if (deactivateSubmitting.value) return
+  if (!deactivateForm.value.password) {
+    appStore.addToast('请输入当前密码', 'warning')
+    return
+  }
+  if (deactivateForm.value.confirmation !== '注销账号') {
+    appStore.addToast('请输入“注销账号”确认操作', 'warning')
+    return
+  }
+  try {
+    deactivateSubmitting.value = true
+    await api('/auth/deactivate', {
+      method: 'POST',
+      body: JSON.stringify(deactivateForm.value),
+    })
+    clearAuth()
+    await router.replace('/')
+  } catch (error) {
+    appStore.addToast(`账号注销失败：${(error as Error).message}`, 'warning')
+  } finally {
+    deactivateSubmitting.value = false
+  }
+}
+
 // ─── Danger zone ──────────────────────────────────────────
 const showDangerConfirm = ref<'reset-class' | 'reset-rules' | null>(null)
-const dangerIncludesBadges = ref(false)
+const resetScope = ref<'current' | 'all'>('current')
+const resetMode = ref<ResetMode>('score')
+const resetConfirmation = ref('')
+const resetPassword = ref('')
+const resetSubmitting = ref(false)
+const expectedResetConfirmation = computed(() => resetScope.value === 'all' ? '重置全部班级' : '重置当前班级')
 
-function confirmDanger() {
+function openResetConfirm() {
+  resetScope.value = 'current'
+  resetMode.value = 'score'
+  resetConfirmation.value = ''
+  resetPassword.value = ''
+  showDangerConfirm.value = 'reset-class'
+}
+
+async function confirmDanger() {
   if (showDangerConfirm.value === 'reset-class') {
-    appStore.resetClassProgress(appStore.currentClassId, dangerIncludesBadges.value)
+    if (resetConfirmation.value !== expectedResetConfirmation.value) {
+      appStore.addToast(`请输入“${expectedResetConfirmation.value}”确认操作`, 'warning')
+      return
+    }
+    if (resetScope.value === 'all' && !resetPassword.value) {
+      appStore.addToast('请输入当前密码', 'warning')
+      return
+    }
+    resetSubmitting.value = true
+    try {
+      if (resetScope.value === 'all') {
+        await appStore.resetAllClassProgress(resetMode.value, resetConfirmation.value, resetPassword.value)
+      } else {
+        await appStore.resetClassProgress(appStore.currentClassId, resetMode.value, resetConfirmation.value)
+      }
+    } finally {
+      resetSubmitting.value = false
+    }
   } else if (showDangerConfirm.value === 'reset-rules') {
     // Reset rules to default
     appStore.currentRules.forEach(r => appStore.deleteScoreRule(r.id))
     ;[
-      { name: '认真听讲', icon: '👂', value: 2 },
-      { name: '积极回答', icon: '✋', value: 3 },
-      { name: '作业优秀', icon: '📝', value: 5 },
-      { name: '帮助同学', icon: '🤝', value: 3 },
-      { name: '课堂表现优秀', icon: '⭐', value: 5 },
-      { name: '违反纪律', icon: '⚠️', value: -2 },
-      { name: '未完成作业', icon: '❌', value: -3 },
-    ].forEach(r => appStore.addScoreRule(r))
-    appStore.addToast('积分规则已重置为默认', 'success')
+      { name: '认真听讲', icon: '👂', value: 2, isQuick: true },
+      { name: '积极回答', icon: '✋', value: 3, isQuick: true },
+      { name: '作业优秀', icon: '📝', value: 5, isQuick: true },
+      { name: '帮助同学', icon: '🤝', value: 3, isQuick: false },
+      { name: '课堂表现优秀', icon: '⭐', value: 5, isQuick: false },
+      { name: '违反纪律', icon: '⚠️', value: -2, isQuick: false },
+      { name: '未完成作业', icon: '❌', value: -3, isQuick: false },
+    ].forEach((rule, index) => appStore.addScoreRule({ ...rule, order: index + 1 }))
+    appStore.addToast('正在重置积分规则为默认配置', 'info')
   }
   showDangerConfirm.value = null
 }
@@ -98,6 +248,49 @@ const levelNames = ['入门', '进阶', '高手', '精英', 'MAX']
       <span v-if="theme.enableEmojis" class="text-4xl">⚙️</span>
       <h1 class="text-3xl font-bold" :class="theme.titleGradient">设置</h1>
     </div>
+
+    <!-- ─── Basic Settings ─── -->
+    <section :class="[theme.cardBg, theme.cardBorder, theme.cardRounded, 'p-5 shadow-sm space-y-4']">
+      <div>
+        <h2 class="text-lg font-bold text-gray-800">🧭 基础设置</h2>
+        <p class="text-xs text-gray-400 mt-0.5">系统名称为租户级配置，其余选项保存在当前浏览器</p>
+      </div>
+      <div class="grid grid-cols-1 gap-4 md:grid-cols-2">
+        <label class="space-y-1.5">
+          <span class="block text-xs font-medium text-gray-500">系统名称</span>
+          <div class="flex gap-2">
+            <input v-model="systemNameDraft" :disabled="!isOwner" maxlength="30" class="min-w-0 flex-1 px-3 py-2 text-sm outline-none disabled:opacity-60" :class="[theme.inputBg, theme.inputBorder, theme.inputRounded]" />
+            <button v-if="isOwner" @click="saveSystemName" class="px-3 py-2 text-sm font-semibold text-white" :class="[theme.buttonPrimary, theme.buttonRounded]">保存</button>
+          </div>
+        </label>
+        <label class="space-y-1.5">
+          <span class="block text-xs font-medium text-gray-500">当前班级</span>
+          <select v-model="appStore.currentClassId" class="w-full px-3 py-2 text-sm outline-none" :class="[theme.inputBg, theme.inputBorder, theme.inputRounded]">
+            <option v-for="cls in appStore.classes" :key="cls.id" :value="cls.id">{{ cls.name }}</option>
+          </select>
+        </label>
+      </div>
+      <div class="grid grid-cols-1 gap-3 md:grid-cols-2">
+        <div class="flex items-center justify-between gap-4 rounded-xl border border-gray-100 px-3 py-3">
+          <div>
+            <p class="text-sm font-medium text-gray-700">浏览器通知提醒</p>
+            <p class="text-xs text-gray-400">有新通知时显示浏览器系统提醒</p>
+          </div>
+          <button @click="toggleNotificationReminders" class="relative h-5 w-10 shrink-0 rounded-full transition-all" :class="themeStore.notificationsEnabled ? 'bg-[#5fb894]' : 'bg-gray-200'">
+            <span class="absolute top-0.5 h-4 w-4 rounded-full bg-white shadow transition-all" :class="themeStore.notificationsEnabled ? 'left-5' : 'left-0.5'"></span>
+          </button>
+        </div>
+        <div class="flex items-center justify-between gap-4 rounded-xl border border-gray-100 px-3 py-3">
+          <div>
+            <p class="text-sm font-medium text-gray-700">动画效果</p>
+            <p class="text-xs text-gray-400">预留偏好；当前版本保持静态图片展示</p>
+          </div>
+          <button @click="toggleAnimationsPreference" class="relative h-5 w-10 shrink-0 rounded-full transition-all" :class="themeStore.animationsEnabled ? 'bg-[#5fb894]' : 'bg-gray-200'">
+            <span class="absolute top-0.5 h-4 w-4 rounded-full bg-white shadow transition-all" :class="themeStore.animationsEnabled ? 'left-5' : 'left-0.5'"></span>
+          </button>
+        </div>
+      </div>
+    </section>
 
     <!-- ─── Score Rules ─── -->
     <section :class="[theme.cardBg, theme.cardBorder, theme.cardRounded, 'p-5 shadow-sm space-y-4']">
@@ -136,6 +329,13 @@ const levelNames = ['入门', '进阶', '高手', '精英', 'MAX']
             :class="rule.value > 0 ? 'bg-[#4ecdc4]/15 text-[#2a9d8f]' : 'bg-[#ff6b9d]/15 text-[#c44569]'"
           >{{ rule.value > 0 ? '+' : '' }}{{ rule.value }}</span>
 
+          <button
+            @click="appStore.toggleQuickScoreRule(rule.id)"
+            class="rounded-full px-2 py-0.5 text-[10px] font-bold transition-all"
+            :class="rule.isQuick ? 'bg-[#ffd93d]/25 text-[#a16207]' : 'bg-gray-100 text-gray-400 hover:text-gray-600'"
+            title="是否显示在课堂快捷模式"
+          >{{ rule.isQuick ? '课堂常用' : '设为常用' }}</button>
+
           <!-- Toggle -->
           <button
             @click="appStore.toggleScoreRule(rule.id)"
@@ -164,8 +364,8 @@ const levelNames = ['入门', '进阶', '高手', '精英', 'MAX']
           <h2 class="text-lg font-bold text-gray-800">🏆 等级阈值</h2>
           <p class="text-xs text-gray-400 mt-0.5">达到对应积分后宠物升级</p>
         </div>
-        <button v-if="!thresholdEditing" @click="startEditThresholds" class="px-3 py-1.5 rounded-xl text-sm font-medium bg-gray-100 text-gray-600 hover:bg-gray-200 transition-all">✏️ 编辑</button>
-        <div v-else class="flex gap-2">
+        <button v-if="isOwner && !thresholdEditing" @click="startEditThresholds" class="px-3 py-1.5 rounded-xl text-sm font-medium bg-gray-100 text-gray-600 hover:bg-gray-200 transition-all">✏️ 编辑</button>
+        <div v-else-if="isOwner" class="flex gap-2">
           <button @click="cancelEditThresholds" class="px-3 py-1.5 rounded-xl text-sm bg-gray-100 text-gray-600 hover:bg-gray-200">取消</button>
           <button @click="saveThresholds" class="px-3 py-1.5 rounded-xl text-sm text-white font-semibold transition-all" :class="theme.buttonPrimary">保存</button>
         </div>
@@ -222,7 +422,7 @@ const levelNames = ['入门', '进阶', '高手', '精英', 'MAX']
         >
           <div class="text-3xl mb-2">🎠</div>
           <div class="font-semibold text-gray-800 text-sm">卡通模式</div>
-          <div class="text-xs text-gray-400 mt-1">渐变色彩、圆角卡片、动画装饰</div>
+          <div class="text-xs text-gray-400 mt-1">柔和色彩、圆角卡片、轻量装饰</div>
           <div v-if="themeStore.style === 'cartoon'" class="mt-2 text-xs text-[#4ecdc4] font-semibold">✓ 当前模式</div>
         </button>
         <button
@@ -238,19 +438,83 @@ const levelNames = ['入门', '进阶', '高手', '精英', 'MAX']
       </div>
     </section>
 
+    <!-- ─── Pet Settings ─── -->
+    <section :class="[theme.cardBg, theme.cardBorder, theme.cardRounded, 'p-5 shadow-sm space-y-4']">
+      <div class="flex items-center justify-between gap-4">
+        <div>
+          <h2 class="text-lg font-bold text-gray-800">🐾 宠物设置</h2>
+          <p class="text-xs text-gray-400 mt-0.5">默认仅允许未分配宠物或积分为 0 的学生更换宠物</p>
+        </div>
+        <button
+          v-if="isOwner"
+          @click="appStore.saveAllowPetChange(!appStore.allowPetChange)"
+          class="w-10 h-5 rounded-full transition-all relative shrink-0"
+          :class="appStore.allowPetChange ? 'bg-[#4ecdc4]' : 'bg-gray-200'"
+          title="是否允许有成长积分的学生更换宠物"
+        >
+          <span class="absolute top-0.5 w-4 h-4 bg-white rounded-full shadow transition-all" :class="appStore.allowPetChange ? 'left-5' : 'left-0.5'"></span>
+        </button>
+        <span v-else class="text-xs text-gray-400">{{ appStore.allowPetChange ? '已允许' : '未允许' }}</span>
+      </div>
+      <div>
+        <p class="mb-2 text-xs font-medium text-gray-500">主题色</p>
+        <div class="flex flex-wrap gap-3">
+          <button
+            v-for="option in themeColorOptions"
+            :key="option.id"
+            @click="themeStore.setThemeColor(option.id)"
+            class="flex items-center gap-2 rounded-xl border px-3 py-2 text-xs font-medium text-gray-600 transition-all"
+            :class="themeStore.themeColor === option.id ? 'border-gray-500 bg-gray-50 shadow-sm' : 'border-gray-200 hover:border-gray-300'"
+          >
+            <span class="h-4 w-4 rounded-full border border-black/5" :style="{ background: option.color }"></span>
+            {{ option.name }}
+          </button>
+        </div>
+      </div>
+    </section>
+
+    <!-- ─── Account Settings ─── -->
+    <section :class="[theme.cardBg, theme.cardBorder, theme.cardRounded, 'p-5 shadow-sm space-y-4']">
+      <div>
+        <h2 class="text-lg font-bold text-gray-800">🔐 账号设置</h2>
+        <p class="text-xs text-gray-400 mt-0.5">当前账号：{{ currentUser?.username || '-' }}</p>
+      </div>
+      <div class="grid grid-cols-1 gap-3 md:grid-cols-3">
+        <div>
+          <label class="mb-1 block text-xs text-gray-500">当前密码</label>
+          <input v-model="passwordForm.currentPassword" type="password" autocomplete="current-password" class="w-full px-3 py-2 text-sm outline-none" :class="[theme.inputBg, theme.inputBorder, theme.inputRounded]" />
+        </div>
+        <div>
+          <label class="mb-1 block text-xs text-gray-500">新密码</label>
+          <input v-model="passwordForm.newPassword" type="password" autocomplete="new-password" placeholder="8-20 位，含大小写字母和数字" class="w-full px-3 py-2 text-sm outline-none" :class="[theme.inputBg, theme.inputBorder, theme.inputRounded]" />
+        </div>
+        <div>
+          <label class="mb-1 block text-xs text-gray-500">确认新密码</label>
+          <input v-model="passwordForm.confirmPassword" type="password" autocomplete="new-password" class="w-full px-3 py-2 text-sm outline-none" :class="[theme.inputBg, theme.inputBorder, theme.inputRounded]" />
+        </div>
+      </div>
+      <button @click="changePassword" :disabled="passwordSubmitting" class="px-4 py-2 text-sm font-semibold text-white transition-all disabled:opacity-50" :class="[theme.buttonPrimary, theme.buttonRounded]">
+        {{ passwordSubmitting ? '保存中...' : '修改密码' }}
+      </button>
+    </section>
+
     <!-- ─── Danger Zone ─── -->
     <section class="p-5 rounded-2xl border-2 border-red-200 bg-red-50/50 space-y-4">
       <h2 class="text-lg font-bold text-red-500">⚠️ 危险区域</h2>
       <p class="text-sm text-gray-500">以下操作不可撤销，请谨慎执行。</p>
       <div class="flex flex-wrap gap-3">
         <button
-          @click="showDangerConfirm = 'reset-class'"
+          @click="openResetConfirm"
           class="px-4 py-2 rounded-xl border-2 border-red-200 bg-white text-red-500 text-sm font-semibold hover:bg-red-50 transition-all"
         >🔄 重置当前班级积分</button>
         <button
           @click="showDangerConfirm = 'reset-rules'"
           class="px-4 py-2 rounded-xl border-2 border-orange-200 bg-white text-orange-500 text-sm font-semibold hover:bg-orange-50 transition-all"
         >📋 重置积分规则为默认</button>
+        <button
+          @click="openDeactivateConfirm"
+          class="px-4 py-2 rounded-xl border-2 border-red-300 bg-white text-red-600 text-sm font-semibold hover:bg-red-50 transition-all"
+        >注销当前账号</button>
       </div>
     </section>
 
@@ -297,6 +561,10 @@ const levelNames = ['入门', '进阶', '高手', '精英', 'MAX']
                 {{ ruleForm.value > 0 ? '+' : '' }}{{ ruleForm.value }}
               </div>
             </div>
+            <label class="flex cursor-pointer items-center gap-2 text-sm text-gray-600">
+              <input v-model="ruleForm.isQuick" type="checkbox" class="h-4 w-4 accent-[#4ecdc4]" />
+              显示在课堂快捷模式
+            </label>
             <div class="flex gap-3 pt-2">
               <button @click="ruleModalMode = null" class="flex-1 py-2 rounded-xl bg-gray-100 text-gray-600 hover:bg-gray-200">取消</button>
               <button @click="submitRule" class="flex-1 py-2 rounded-xl text-white font-semibold transition-all" :class="theme.buttonPrimary">
@@ -314,16 +582,74 @@ const levelNames = ['入门', '进阶', '高手', '精英', 'MAX']
         <div class="w-full max-w-sm animate-modal-in" :class="[theme.cardBg, theme.cardRounded, 'p-6 shadow-2xl']">
           <h3 class="text-lg font-bold text-red-500 mb-2">⚠️ 确认操作</h3>
           <p class="text-sm text-gray-500 mb-4">
-            <span v-if="showDangerConfirm === 'reset-class'">将重置「{{ appStore.currentClass?.name }}」所有学生积分为 0。此操作不可撤销。</span>
+            <span v-if="showDangerConfirm === 'reset-class'">将按所选范围清理成长数据。此操作不可撤销。</span>
             <span v-else>将重置当前班级的积分规则为系统默认值。此操作不可撤销。</span>
           </p>
-          <label v-if="showDangerConfirm === 'reset-class'" class="flex items-center gap-2 text-sm text-gray-600 mb-4 cursor-pointer">
-            <input type="checkbox" v-model="dangerIncludesBadges" class="w-4 h-4 accent-[#ff9800]" />
-            同时重置徽章数量
-          </label>
+          <div v-if="showDangerConfirm === 'reset-class'" class="space-y-4 mb-4">
+            <div>
+              <label class="mb-1 block text-xs text-gray-500">重置范围</label>
+              <select v-model="resetScope" class="w-full px-3 py-2 text-sm outline-none" :class="[theme.inputBg, theme.inputBorder, theme.inputRounded]">
+                <option value="current">当前班级：{{ appStore.currentClass?.name }}</option>
+                <option v-if="isOwner" value="all">全部班级</option>
+              </select>
+            </div>
+            <div>
+              <label class="mb-1 block text-xs text-gray-500">清理内容</label>
+              <select v-model="resetMode" class="w-full px-3 py-2 text-sm outline-none" :class="[theme.inputBg, theme.inputBorder, theme.inputRounded]">
+                <option value="score">仅重置积分</option>
+                <option value="score_badges">重置积分和徽章</option>
+                <option value="all_growth">重置全部成长数据</option>
+              </select>
+              <p v-if="resetMode === 'all_growth'" class="mt-1 text-xs text-gray-400">将清空积分、徽章、当前装扮和装扮库存，保留学生、宠物种类与昵称。</p>
+            </div>
+            <div>
+              <label class="mb-1 block text-xs text-gray-500">输入“{{ expectedResetConfirmation }}”确认</label>
+              <input v-model="resetConfirmation" type="text" autocomplete="off" class="w-full px-3 py-2 text-sm outline-none" :class="[theme.inputBg, theme.inputBorder, theme.inputRounded]" />
+            </div>
+            <div v-if="resetScope === 'all'">
+              <label class="mb-1 block text-xs text-gray-500">当前密码</label>
+              <input v-model="resetPassword" type="password" autocomplete="current-password" class="w-full px-3 py-2 text-sm outline-none" :class="[theme.inputBg, theme.inputBorder, theme.inputRounded]" />
+            </div>
+          </div>
           <div class="flex gap-3">
-            <button @click="showDangerConfirm = null" class="flex-1 py-2 rounded-xl bg-gray-100 text-gray-600 hover:bg-gray-200">取消</button>
-            <button @click="confirmDanger" class="flex-1 py-2 rounded-xl bg-red-500 text-white font-semibold hover:bg-red-600">确认执行</button>
+            <button @click="showDangerConfirm = null" :disabled="resetSubmitting" class="flex-1 py-2 rounded-xl bg-gray-100 text-gray-600 hover:bg-gray-200 disabled:opacity-50">取消</button>
+            <button @click="confirmDanger" :disabled="resetSubmitting" class="flex-1 py-2 rounded-xl bg-red-500 text-white font-semibold hover:bg-red-600 disabled:opacity-50">
+              {{ resetSubmitting ? '处理中...' : '确认执行' }}
+            </button>
+          </div>
+        </div>
+      </div>
+    </Transition>
+
+    <!-- Account deactivate modal -->
+    <Transition name="modal">
+      <div v-if="showDeactivateConfirm" class="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4" @click.self="closeDeactivateConfirm">
+        <div class="w-full max-w-sm animate-modal-in" :class="[theme.cardBg, theme.cardRounded, 'p-6 shadow-2xl']">
+          <h3 class="text-lg font-bold text-red-500 mb-2">注销当前账号</h3>
+          <p class="text-sm text-gray-500 mb-4">账号注销后将立即退出登录，历史数据仍会保留。请输入当前密码，并填写“注销账号”确认操作。</p>
+          <div class="space-y-3">
+            <input
+              v-model="deactivateForm.password"
+              type="password"
+              autocomplete="current-password"
+              placeholder="当前密码"
+              class="w-full px-3 py-2 text-sm outline-none"
+              :class="[theme.inputBg, theme.inputBorder, theme.inputRounded]"
+            />
+            <input
+              v-model="deactivateForm.confirmation"
+              type="text"
+              autocomplete="off"
+              placeholder="输入：注销账号"
+              class="w-full px-3 py-2 text-sm outline-none"
+              :class="[theme.inputBg, theme.inputBorder, theme.inputRounded]"
+            />
+          </div>
+          <div class="flex gap-3 mt-5">
+            <button @click="closeDeactivateConfirm" :disabled="deactivateSubmitting" class="flex-1 py-2 rounded-xl bg-gray-100 text-gray-600 hover:bg-gray-200 disabled:opacity-50">取消</button>
+            <button @click="deactivateAccount" :disabled="deactivateSubmitting" class="flex-1 py-2 rounded-xl bg-red-500 text-white font-semibold hover:bg-red-600 disabled:opacity-50">
+              {{ deactivateSubmitting ? '处理中...' : '确认注销' }}
+            </button>
           </div>
         </div>
       </div>

@@ -131,142 +131,25 @@ body {
   transition: all 0.2s ease;
 }
 
-/* ─── 宠物动画 ─────────────────────────────────────────── */
-@keyframes pet-breathing {
-  0%, 100% { transform: scale(1); }
-  50% { transform: scale(1.06); }
-}
-
-@keyframes pet-happy {
-  0% { transform: scale(1) rotate(0deg); }
-  15% { transform: scale(1.2) rotate(-12deg); }
-  30% { transform: scale(1.2) rotate(12deg); }
-  45% { transform: scale(1.15) rotate(-8deg); }
-  60% { transform: scale(1.15) rotate(8deg); }
-  75% { transform: scale(1.05) rotate(-4deg); }
-  90% { transform: scale(1.05) rotate(4deg); }
-  100% { transform: scale(1) rotate(0deg); }
-}
-
-@keyframes pet-sad {
-  0% { transform: translateY(0) scale(1); opacity: 1; }
-  20% { transform: translateY(4px) scale(0.95); opacity: 0.85; }
-  40% { transform: translateY(0) scale(0.95); opacity: 0.85; }
-  60% { transform: translateY(4px) scale(0.95); opacity: 0.85; }
-  80% { transform: translateY(0) scale(0.97); opacity: 0.9; }
-  100% { transform: translateY(0) scale(1); opacity: 1; }
-}
-
-@keyframes pet-sleeping {
-  0%, 100% { transform: scale(1) rotate(0deg); }
-  25% { transform: scale(0.97) rotate(-3deg); }
-  75% { transform: scale(0.97) rotate(3deg); }
-}
-
-@keyframes pet-playing {
-  0% { transform: translateY(0) rotate(0deg); }
-  25% { transform: translateY(-12px) rotate(-5deg); }
-  50% { transform: translateY(0) rotate(0deg); }
-  75% { transform: translateY(-8px) rotate(5deg); }
-  100% { transform: translateY(0) rotate(0deg); }
-}
-
-@keyframes pet-showing {
-  0% { transform: scale(1); }
-  20% { transform: scale(1.25) rotate(-5deg); }
-  40% { transform: scale(1.25) rotate(5deg); }
-  60% { transform: scale(1.2) rotate(-3deg); }
-  80% { transform: scale(1.1) rotate(0deg); }
-  100% { transform: scale(1); }
-}
-
-@keyframes pet-max-glow-pulse {
-  0%, 100% { filter: drop-shadow(0 0 6px #ffd700) drop-shadow(0 0 12px #ff9800); }
-  50% { filter: drop-shadow(0 0 12px #ffd700) drop-shadow(0 0 24px #ff9800); }
-}
-
-.animate-pet-breathing {
-  animation: pet-breathing 3s ease-in-out infinite;
-}
-
-.animate-pet-happy {
-  animation: pet-happy 1.6s ease-in-out 1;
-}
-
-.animate-pet-sad {
-  animation: pet-sad 1.6s ease-in-out 1;
-}
-
-.animate-pet-sleeping {
-  animation: pet-sleeping 4s ease-in-out infinite;
-}
-
-.animate-pet-playing {
-  animation: pet-playing 0.8s ease-in-out infinite;
-}
-
-.animate-pet-showing {
-  animation: pet-showing 1.6s ease-in-out 1;
-}
-
-.pet-max-level {
-  animation: pet-max-glow-pulse 2s ease-in-out infinite;
-}
-
+/* ─── 静态宠物展示 ─────────────────────────────────────── */
 .pet-avatar-shell {
   isolation: isolate;
   overflow: visible;
 }
 
-.pet-avatar-shell-max::before {
-  content: "";
-  position: absolute;
-  inset: 2%;
-  border-radius: 9999px;
-  pointer-events: none;
-  z-index: 0;
-  animation: pet-max-aura 2s ease-in-out infinite;
-}
-
-.pet-avatar-scale {
-  transform-origin: center 78%;
-  transition: transform 0.25s ease;
+.pet-avatar-body {
   z-index: 20;
-}
-
-.pet-avatar-motion {
-  transform-origin: center 74%;
 }
 
 .pet-avatar-image {
   width: 100%;
   height: 100%;
   object-fit: contain;
-  opacity: 1;
-  filter: drop-shadow(0 7px 9px rgba(30, 41, 59, 0.2));
-  transition: opacity 0.18s ease;
-}
-
-.pet-avatar-image-hidden {
-  position: absolute;
-  inset: 0;
-  opacity: 0;
-}
-
-.pet-avatar-max-glow {
-  animation: pet-max-image-glow 2s ease-in-out infinite;
 }
 
 .pet-avatar-emoji {
   line-height: 1;
   filter: drop-shadow(0 5px 8px rgba(30, 41, 59, 0.16));
-}
-
-.pet-avatar-emoji-max {
-  text-shadow:
-    0 0 6px #ffd700,
-    0 0 12px #ffb300,
-    0 0 20px #fff1a8;
 }
 
 .pet-avatar-empty {
@@ -276,8 +159,18 @@ body {
 
 .pet-cosmetic {
   position: absolute;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   line-height: 1;
   filter: drop-shadow(0 2px 3px rgba(30, 41, 59, 0.2));
+}
+
+.pet-cosmetic-image {
+  display: block;
+  width: var(--cosmetic-size, 1em);
+  height: var(--cosmetic-size, 1em);
+  object-fit: contain;
 }
 
 .pet-cosmetic-back {
@@ -285,6 +178,7 @@ body {
   inset: 16% 6% auto;
   text-align: center;
   transform: scale(1.18);
+  --cosmetic-size: 1.35em;
 }
 
 .pet-cosmetic-head {
@@ -292,6 +186,7 @@ body {
   top: 0;
   left: 50%;
   transform: translate(-50%, -10%);
+  --cosmetic-size: 1em;
 }
 
 .pet-cosmetic-face {
@@ -299,6 +194,7 @@ body {
   right: 14%;
   top: 38%;
   font-size: 0.45em;
+  --cosmetic-size: 1.8em;
 }
 
 .pet-cosmetic-neck {
@@ -307,6 +203,7 @@ body {
   left: 50%;
   transform: translateX(-50%);
   font-size: 0.4em;
+  --cosmetic-size: 2em;
 }
 
 .pet-cosmetic-toy {
@@ -314,158 +211,7 @@ body {
   right: 2%;
   bottom: 2%;
   transform: scale(0.82);
-}
-
-.pet-effect-layer {
-  position: absolute;
-  inset: 0;
-  z-index: 70;
-  pointer-events: none;
-  overflow: visible;
-}
-
-.pet-effect-heart {
-  position: absolute;
-  top: 4%;
-  font-size: 24%;
-  line-height: 1;
-  animation: heart-float 1.2s ease-out forwards;
-  filter: drop-shadow(0 2px 3px rgba(255, 107, 157, 0.35));
-}
-
-.pet-effect-tear {
-  position: absolute;
-  top: 42%;
-  font-size: 21%;
-  line-height: 1;
-  animation: tear-drop 1s ease-in forwards;
-  filter: drop-shadow(0 2px 2px rgba(64, 144, 216, 0.25));
-}
-
-.pet-effect-zzz {
-  position: absolute;
-  font-size: 23%;
-  line-height: 1;
-  animation: zzz-float 2.6s ease-in-out infinite;
-  filter: drop-shadow(0 2px 3px rgba(79, 70, 229, 0.2));
-}
-
-.level-up-burst-particle {
-  position: absolute;
-  left: 50%;
-  top: 42%;
-  z-index: 15;
-  font-size: 20px;
-  line-height: 1;
-  pointer-events: none;
-  animation: particle-burst 1.4s ease-out both;
-  filter: drop-shadow(0 2px 4px rgba(245, 158, 11, 0.3));
-}
-
-@keyframes pet-max-aura {
-  0%, 100% {
-    box-shadow:
-      0 0 0 1px rgba(255, 215, 0, 0.55),
-      0 0 14px rgba(255, 215, 0, 0.35),
-      0 0 26px rgba(255, 152, 0, 0.22);
-    opacity: 0.8;
-  }
-  50% {
-    box-shadow:
-      0 0 0 2px rgba(255, 215, 0, 0.75),
-      0 0 22px rgba(255, 215, 0, 0.55),
-      0 0 38px rgba(255, 152, 0, 0.34);
-    opacity: 1;
-  }
-}
-
-@keyframes pet-max-image-glow {
-  0%, 100% {
-    filter:
-      drop-shadow(0 7px 9px rgba(30, 41, 59, 0.2))
-      drop-shadow(0 0 5px rgba(255, 215, 0, 0.75))
-      drop-shadow(0 0 12px rgba(255, 152, 0, 0.42));
-  }
-  50% {
-    filter:
-      drop-shadow(0 7px 9px rgba(30, 41, 59, 0.2))
-      drop-shadow(0 0 10px rgba(255, 215, 0, 0.95))
-      drop-shadow(0 0 22px rgba(255, 152, 0, 0.6));
-  }
-}
-
-@keyframes heart-float {
-  0% { transform: translate(-50%, 0) scale(0.65); opacity: 0; }
-  18% { opacity: 1; }
-  100% { transform: translate(-50%, -30px) scale(1.05); opacity: 0; }
-}
-
-@keyframes tear-drop {
-  0% { transform: translate(-50%, -4px) scale(0.75); opacity: 0; }
-  15% { opacity: 1; }
-  100% { transform: translate(-50%, 15px) scale(0.95); opacity: 0; }
-}
-
-@keyframes zzz-float {
-  0% { transform: translate(-50%, 8px) scale(0.65); opacity: 0; }
-  20% { opacity: 0.95; }
-  100% { transform: translate(-50%, -18px) scale(1.05); opacity: 0; }
-}
-
-@keyframes particle-burst {
-  0% {
-    transform: translate(-50%, -50%) scale(0.45) rotate(0deg);
-    opacity: 0;
-  }
-  14% { opacity: 1; }
-  100% {
-    transform:
-      translate(calc(-50% + var(--burst-x)), calc(-50% + var(--burst-y)))
-      scale(0.9)
-      rotate(var(--burst-rotate));
-    opacity: 0;
-  }
-}
-
-/* 进度条动画 */
-@keyframes progress-fill {
-  from { width: 0%; }
-}
-
-.animate-progress-fill {
-  animation: progress-fill 0.6s ease-out forwards;
-}
-
-/* 卡片选中高亮 */
-@keyframes card-select-pulse {
-  0%, 100% { box-shadow: 0 0 0 3px #4ecdc4; }
-  50% { box-shadow: 0 0 0 6px #4ecdc455; }
-}
-
-.card-selected-glow {
-  animation: card-select-pulse 1.5s ease-in-out infinite;
-}
-
-/* 加分特效 */
-@keyframes score-pop {
-  0% { transform: translateY(0) scale(1); opacity: 1; }
-  50% { transform: translateY(-20px) scale(1.3); opacity: 0.9; }
-  100% { transform: translateY(-40px) scale(0.8); opacity: 0; }
-}
-
-.animate-score-pop {
-  animation: score-pop 0.8s ease-out forwards;
-}
-
-/* 徽章旋转 */
-@keyframes badge-spin {
-  0% { transform: rotateY(0deg); }
-  50% { transform: rotateY(180deg); }
-  100% { transform: rotateY(360deg); }
-}
-
-.animate-badge-spin {
-  animation: badge-spin 0.6s ease-in-out;
+  --cosmetic-size: 1em;
 }
 
 /* 模态框进入 */

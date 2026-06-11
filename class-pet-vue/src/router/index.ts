@@ -1,4 +1,5 @@
 import { createRouter, createWebHistory } from 'vue-router'
+import { getAuthToken } from '@/services/api'
 
 const router = createRouter({
   history: createWebHistory(),
@@ -19,8 +20,15 @@ const router = createRouter({
       component: () => import('@/views/auth/ForgotPasswordView.vue'),
     },
     {
+      path: '/dashboard/quick-score',
+      name: 'QuickScore',
+      component: () => import('@/views/QuickScoreView.vue'),
+      meta: { requiresAuth: true },
+    },
+    {
       path: '/dashboard',
       component: () => import('@/layouts/DashboardLayout.vue'),
+      meta: { requiresAuth: true },
       children: [
         {
           path: '',
@@ -63,6 +71,21 @@ const router = createRouter({
           component: () => import('@/views/BadgesView.vue'),
         },
         {
+          path: 'leaderboard',
+          name: 'Leaderboard',
+          component: () => import('@/views/LeaderboardView.vue'),
+        },
+        {
+          path: 'ai-analysis',
+          name: 'AiAnalysis',
+          component: () => import('@/views/AiAnalysisView.vue'),
+        },
+        {
+          path: 'action-logs',
+          name: 'ActionLogs',
+          component: () => import('@/views/ActionLogsView.vue'),
+        },
+        {
           path: 'settings',
           name: 'Settings',
           component: () => import('@/views/SettingsView.vue'),
@@ -70,6 +93,15 @@ const router = createRouter({
       ],
     },
   ],
+})
+
+router.beforeEach(to => {
+  if (to.meta.requiresAuth && !getAuthToken()) {
+    return { path: '/', query: { redirect: to.fullPath } }
+  }
+  if ((to.path === '/' || to.path === '/register') && getAuthToken()) {
+    return '/dashboard'
+  }
 })
 
 export default router

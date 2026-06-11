@@ -1,5 +1,3 @@
-export type AnimationState = 'idle' | 'breathing' | 'happy' | 'sad' | 'sleeping' | 'playing' | 'showing'
-
 export interface Pet {
   id: string
   name: string
@@ -7,13 +5,17 @@ export interface Pet {
   category: string
   stages: string[]
   baseColor: string
+  hasImage?: boolean
 }
+
+export type CosmeticType = 'toy' | 'head' | 'back' | 'neck' | 'face'
 
 export interface CosmeticItem {
   id: string
   name: string
   icon: string
-  type: 'toy' | 'head' | 'back' | 'neck' | 'face'
+  type: CosmeticType
+  assetPath?: string
 }
 
 export interface StudentCosmetics {
@@ -34,7 +36,6 @@ export interface Student {
   score: number
   badges: number
   cosmetics: StudentCosmetics
-  animState: AnimationState
 }
 
 export interface Class {
@@ -42,6 +43,12 @@ export interface Class {
   name: string
   gradientFrom: string
   gradientTo: string
+  teacherCount: number
+  permissions: {
+    canScore: boolean
+    canManageStudents: boolean
+    canManageConfig: boolean
+  }
 }
 
 export interface Group {
@@ -60,6 +67,7 @@ export interface ScoreRule {
   icon: string
   value: number
   enabled: boolean
+  isQuick: boolean
   order: number
   classId: number
 }
@@ -75,18 +83,45 @@ export interface ScoreAction {
   reverted: boolean
 }
 
+export interface BadgeRecord {
+  id: number
+  studentId: number
+  type: 'milestone' | 'exchange' | 'manual' | 'weekly' | 'monthly' | 'semester'
+  amount: number
+  description: string
+  timestamp: number
+  milestone?: number
+  settlementId?: number
+  customBadgeId?: number
+  customBadgeName?: string
+  icon?: string
+  operatorName?: string
+}
+
 export interface AppToast {
   id: number
   message: string
   type: 'info' | 'success' | 'warning' | 'error'
 }
 
-export interface LevelUpEvent {
-  studentId: number
-  studentName: string
-  petId: string
-  petName: string
-  newLevel: number   // 0-4
-  stageName: string  // 如"猫王"
-  isMaxLevel: boolean
+export interface StudentImportRow {
+  index: number
+  name: string
+  groupId: string
+  petId: string | null
+}
+
+export interface StudentImportResultRow {
+  index: number
+  name: string
+  studentId?: number
+  status: 'created' | 'skipped' | 'failed'
+  reason?: string
+}
+
+export interface StudentImportResult {
+  created: number
+  skipped: number
+  failed: number
+  rows: StudentImportResultRow[]
 }

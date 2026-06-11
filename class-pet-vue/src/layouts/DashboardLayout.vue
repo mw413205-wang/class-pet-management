@@ -1,35 +1,69 @@
 <script setup lang="ts">
-import { ref, computed } from 'vue'
+import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
 import { useRouter, useRoute, RouterView } from 'vue-router'
 import { useThemeStore } from '@/stores/theme'
+import { useAppStore } from '@/stores/appStore'
+import { api, getStoredUser, logout } from '@/services/api'
 
 const router = useRouter()
 const route = useRoute()
 const themeStore = useThemeStore()
+const appStore = useAppStore()
 const theme = computed(() => themeStore.theme)
 const style = computed(() => themeStore.style)
+const authUser = getStoredUser()
 
-const notificationCount = ref(3)
 const showNotifications = ref(false)
 const showUserMenu = ref(false)
 
-const notifications = ref([
-  { id: 1, text: '陈静的熊猫宝宝升级到第3阶段！', time: '5分钟前', emoji: '🐼', read: false },
-  { id: 2, text: '郑美的白猫达到满级，继续陪伴成长！', time: '1小时前', emoji: '🐱', read: false },
-  { id: 3, text: '作业减免卡库存不足（剩余2件）', time: '2小时前', emoji: '⚠️', read: false },
-])
+interface NotificationItem {
+  id: number
+  type: 'pet_level_up' | 'pet_max_level' | 'badge_awarded' | 'stock_warning' | 'collaboration' | 'system'
+  title: string
+  message: string
+  targetPath: string
+  time: string
+  read: boolean
+}
 
-const navigation = [
+const notifications = ref<NotificationItem[]>([])
+const notificationCount = ref(0)
+let notificationTimer: number | undefined
+let unreadCountInitialized = false
+
+const notificationEmoji: Record<NotificationItem['type'], string> = {
+  pet_level_up: '🐾',
+  pet_max_level: '🏆',
+  badge_awarded: '🏅',
+  stock_warning: '⚠️',
+  collaboration: '👩‍🏫',
+  system: '📢',
+}
+
+type NavigationPermission = 'score' | 'students' | 'config'
+const navigation: Array<{ name: string; path: string; emoji: string; exact?: boolean; newWindow?: boolean; permission?: NavigationPermission }> = [
   { name: '学生墙', path: '/dashboard', emoji: '🏠', exact: true },
   { name: '班级管理', path: '/dashboard/classes', emoji: '📚' },
-  { name: '学生管理', path: '/dashboard/students', emoji: '👨‍🎓' },
+  { name: '学生管理', path: '/dashboard/students', emoji: '👨‍🎓', permission: 'students' },
+  { name: '课堂模式', path: '/dashboard/quick-score', emoji: '⚡', newWindow: true, permission: 'score' },
   { name: '随机点名', path: '/dashboard/random-picker', emoji: '🎲' },
   { name: '幸运抽奖', path: '/dashboard/lucky-draw', emoji: '🎁' },
-  { name: '小卖部', path: '/dashboard/rewards', emoji: '🏪' },
-  { name: '宠物分配', path: '/dashboard/pets', emoji: '🐾' },
+  { name: '排行榜', path: '/dashboard/leaderboard', emoji: '📊' },
+  { name: '学情分析', path: '/dashboard/ai-analysis', emoji: '🧠' },
+  { name: '小卖部', path: '/dashboard/rewards', emoji: '🏪', permission: 'score' },
+  { name: '宠物分配', path: '/dashboard/pets', emoji: '🐾', permission: 'students' },
   { name: '徽章墙', path: '/dashboard/badges', emoji: '🏆' },
+  { name: '操作日志', path: '/dashboard/action-logs', emoji: '🧾' },
   { name: '系统设置', path: '/dashboard/settings', emoji: '⚙️' },
 ]
+const visibleNavigation = computed(() => navigation.filter(item => {
+  if (!item.permission) return true
+  if (authUser?.role === 'owner') return true
+  if (item.permission === 'score') return appStore.currentClassPermissions.canScore
+  if (item.permission === 'students') return appStore.currentClassPermissions.canManageStudents
+  if (item.permission === 'config') return appStore.currentClassPermissions.canManageConfig
+  return true
+}))
 
 function isActive(item: { path: string; exact?: boolean }) {
   if (item.exact) {
@@ -42,15 +76,110 @@ function navigate(path: string) {
   router.push(path)
 }
 
-function handleLogout() {
+function openQuickScore() {
+  window.open('/dashboard/quick-score', 'quick-score', 'width=420,height=700,resizable=yes,scrollbars=yes')
+}
+
+function handleNavigation(item: { path: string; newWindow?: boolean }) {
+  if (item.newWindow) {
+    openQuickScore()
+  } else {
+    navigate(item.path)
+  }
+}
+
+function handleShortcut(event: KeyboardEvent) {
+  if (event.ctrlKey && event.shiftKey && event.key.toLowerCase() === 'q') {
+    event.preventDefault()
+    openQuickScore()
+  }
+}
+
+async function loadNotifications() {
+  try {
+    notifications.value = await api<NotificationItem[]>('/notifications')
+    notificationCount.value = notifications.value.filter(notification => !notification.read).length
+  } catch (error) {
+    appStore.addToast(`通知加载失败：${error instanceof Error ? error.message : '未知错误'}`, 'error')
+  }
+}
+
+async function loadUnreadCount() {
+  try {
+    const previousCount = notificationCount.value
+    const nextCount = (await api<{ count: number }>('/notifications/unread-count')).count
+    notificationCount.value = nextCount
+    if (
+      unreadCountInitialized
+      && themeStore.notificationsEnabled
+      && nextCount > previousCount
+      && 'Notification' in window
+      && Notification.permission === 'granted'
+    ) {
+      const notification = new Notification(appStore.systemName, {
+        body: `有 ${nextCount - previousCount} 条新通知待查看`,
+      })
+      notification.onclick = () => {
+        window.focus()
+        showNotifications.value = true
+        void loadNotifications()
+        notification.close()
+      }
+    }
+    unreadCountInitialized = true
+  } catch {
+    // 后台轮询失败不打断主要操作，用户打开面板时会再次加载。
+  }
+}
+
+function toggleNotifications() {
+  showNotifications.value = !showNotifications.value
   showUserMenu.value = false
+  if (showNotifications.value) void loadNotifications()
+}
+
+onMounted(() => {
+  void appStore.initializePersistence()
+  void loadUnreadCount()
+  notificationTimer = window.setInterval(() => void loadUnreadCount(), 30_000)
+  window.addEventListener('keydown', handleShortcut)
+})
+watch(() => themeStore.notificationsEnabled, enabled => {
+  if (enabled) void loadUnreadCount()
+})
+onUnmounted(() => {
+  if (notificationTimer) window.clearInterval(notificationTimer)
+  window.removeEventListener('keydown', handleShortcut)
+})
+
+async function handleLogout() {
+  showUserMenu.value = false
+  await logout()
   router.push('/')
 }
 
-function markAllRead() {
-  notifications.value = notifications.value.map(n => ({ ...n, read: true }))
-  notificationCount.value = 0
-  showNotifications.value = false
+async function markAllRead() {
+  try {
+    await api('/notifications/read-all', { method: 'PUT' })
+    notifications.value = notifications.value.map(n => ({ ...n, read: true }))
+    notificationCount.value = 0
+  } catch (error) {
+    appStore.addToast(`通知更新失败：${error instanceof Error ? error.message : '未知错误'}`, 'error')
+  }
+}
+
+async function openNotification(notification: NotificationItem) {
+  try {
+    if (!notification.read) {
+      await api(`/notifications/${notification.id}/read`, { method: 'PUT' })
+      notification.read = true
+      notificationCount.value = Math.max(0, notificationCount.value - 1)
+    }
+    showNotifications.value = false
+    if (notification.targetPath) await router.push(notification.targetPath)
+  } catch (error) {
+    appStore.addToast(`通知更新失败：${error instanceof Error ? error.message : '未知错误'}`, 'error')
+  }
 }
 
 function closeDropdowns(e: MouseEvent) {
@@ -70,6 +199,12 @@ function closeDropdowns(e: MouseEvent) {
     class="min-h-screen"
     @click="closeDropdowns"
   >
+    <div v-if="!appStore.persistenceReady" class="fixed inset-0 z-[100] flex items-center justify-center bg-white/90">
+      <div class="rounded-xl border border-gray-200 bg-white px-5 py-4 text-sm font-semibold text-gray-500 shadow-lg">
+        正在加载班级数据...
+      </div>
+    </div>
+
     <!-- 背景装饰（仅卡通模式） -->
     <template v-if="theme.enableDecorations">
       <div class="fixed top-10 left-10 text-6xl opacity-20 pointer-events-none select-none animate-bounce-light" style="animation-duration: 3s;">⭐</div>
@@ -108,7 +243,7 @@ function closeDropdowns(e: MouseEvent) {
             </div>
             <div>
               <h1 class="text-2xl font-bold" :class="theme.titleGradient">
-                班级宠物园
+                {{ appStore.systemName }}
               </h1>
               <p class="text-xs text-[#ff6b6b]">
                 {{ theme.enableEmojis ? '✨ 让成长看得见 ✨' : '让成长看得见' }}
@@ -117,12 +252,12 @@ function closeDropdowns(e: MouseEvent) {
           </div>
 
           <!-- 桌面端导航菜单 -->
-          <nav class="hidden lg:flex items-center gap-1 flex-1 justify-center overflow-x-auto">
+          <nav class="hidden lg:flex items-center gap-1 flex-1 justify-start overflow-x-auto">
             <button
-              v-for="item in navigation"
+              v-for="item in visibleNavigation"
               :key="item.path"
-              @click="navigate(item.path)"
-              class="relative px-4 py-2.5 text-sm font-medium transition-all duration-200 flex-shrink-0 flex items-center gap-1.5"
+              @click="handleNavigation(item)"
+              class="relative px-3 py-2.5 text-sm font-medium transition-all duration-200 flex-shrink-0 flex items-center gap-1.5"
               :class="[
                 theme.buttonRounded,
                 isActive(item) ? [theme.buttonPrimary, 'text-white', theme.buttonShadow, style === 'cartoon' ? 'scale-105' : ''] : 'text-[#4a4a4a] hover:bg-gray-100'
@@ -156,7 +291,7 @@ function closeDropdowns(e: MouseEvent) {
             <!-- 通知铃铛 -->
             <div class="relative notification-area">
               <button
-                @click.stop="showNotifications = !showNotifications; showUserMenu = false"
+                @click.stop="toggleNotifications"
                 class="relative w-12 h-12 flex items-center justify-center transition-all duration-200 hover:scale-110 hover:shadow-xl"
                 :class="[theme.buttonRounded, style === 'cartoon' ? 'bg-gradient-to-br from-[#ffe5d9] to-[#ffd9e8]' : 'bg-gray-100']"
               >
@@ -186,15 +321,20 @@ function closeDropdowns(e: MouseEvent) {
                     >全部已读</button>
                   </div>
                   <div class="max-h-72 overflow-y-auto">
+                    <div v-if="notifications.length === 0" class="px-4 py-8 text-center text-xs text-gray-400">
+                      暂无通知
+                    </div>
                     <div
                       v-for="n in notifications"
                       :key="n.id"
+                      @click="openNotification(n)"
                       class="flex items-start gap-3 px-4 py-3 hover:bg-gray-50 cursor-pointer transition-colors border-b last:border-0"
                       :class="[!n.read ? 'bg-[#fff9f0]' : '', style === 'cartoon' ? 'border-[#ffe5d9]' : 'border-gray-100']"
                     >
-                      <span class="text-2xl flex-shrink-0">{{ n.emoji }}</span>
+                      <span class="text-2xl flex-shrink-0">{{ notificationEmoji[n.type] }}</span>
                       <div class="flex-1 min-w-0">
-                        <p class="text-xs text-[#4a4a4a] leading-relaxed">{{ n.text }}</p>
+                        <p class="text-xs font-semibold text-[#4a4a4a]">{{ n.title }}</p>
+                        <p class="mt-0.5 text-xs text-[#4a4a4a] leading-relaxed">{{ n.message }}</p>
                         <p class="text-xs text-[#a0a0a0] mt-1">{{ n.time }}</p>
                       </div>
                       <div v-if="!n.read" class="w-2 h-2 bg-[#ff6b6b] rounded-full flex-shrink-0 mt-1"></div>
@@ -226,8 +366,8 @@ function closeDropdowns(e: MouseEvent) {
                   </div>
                 </div>
                 <div class="hidden md:block text-left">
-                  <p class="text-sm font-medium text-[#4a4a4a]">张老师</p>
-                  <p class="text-xs text-[#ff6b6b]">三年级(1)班</p>
+                  <p class="text-sm font-medium text-[#4a4a4a]">{{ authUser?.displayName ?? '教师' }}</p>
+                  <p class="text-xs text-[#ff6b6b]">{{ appStore.currentClass?.name ?? '暂无班级' }}</p>
                 </div>
                 <span class="text-xs text-[#4a4a4a]">▾</span>
               </button>
@@ -266,9 +406,9 @@ function closeDropdowns(e: MouseEvent) {
         :class="style === 'cartoon' ? 'border-[#ffe5d9]' : 'border-gray-200'">
         <div class="flex gap-1.5 min-w-max py-2">
           <button
-            v-for="item in navigation"
+          v-for="item in visibleNavigation"
             :key="item.path"
-            @click="navigate(item.path)"
+            @click="handleNavigation(item)"
             class="flex flex-col items-center gap-1 px-3 py-2 text-xs font-medium transition-all min-w-[72px]"
             :class="[
               theme.buttonRounded,
@@ -284,8 +424,25 @@ function closeDropdowns(e: MouseEvent) {
 
     <!-- 页面内容 -->
     <main class="max-w-[1800px] mx-auto p-4 md:p-6 lg:p-8 relative z-10">
-      <RouterView />
+      <RouterView v-if="appStore.persistenceReady" />
     </main>
+
+    <div class="fixed bottom-5 left-1/2 z-[60] flex -translate-x-1/2 flex-col gap-2">
+      <TransitionGroup name="dropdown">
+        <div
+          v-for="toast in appStore.toasts"
+          :key="toast.id"
+          class="min-w-60 rounded-lg px-4 py-3 text-center text-sm font-semibold text-white shadow-xl"
+          :class="toast.type === 'warning'
+            ? 'bg-[#ff9800]'
+            : toast.type === 'error'
+              ? 'bg-red-500'
+              : toast.type === 'success'
+                ? 'bg-[#2a9d8f]'
+                : 'bg-gray-800'"
+        >{{ toast.message }}</div>
+      </TransitionGroup>
+    </div>
 
     <!-- 浮动装饰（仅卡通模式） -->
     <div v-if="theme.enableDecorations" class="fixed bottom-5 right-5 pointer-events-none z-0">

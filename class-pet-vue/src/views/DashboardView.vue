@@ -1,9 +1,8 @@
 <script setup lang="ts">
-import { ref, computed } from 'vue'
+import { ref, computed, watch } from 'vue'
 import { useThemeStore } from '@/stores/theme'
 import { useAppStore } from '@/stores/appStore'
 import PetAvatar from '@/components/PetAvatar.vue'
-import PetLevelUpModal from '@/components/PetLevelUpModal.vue'
 import { getPetById } from '@/data/petData'
 import type { Student, ScoreRule } from '@/types'
 
@@ -61,6 +60,10 @@ function selectStudent(student: Student) {
     if (selectedStudents.value.has(student.id)) {
       selectedStudents.value.delete(student.id)
     } else {
+      if (selectedStudents.value.size >= 100) {
+        appStore.addToast('批量积分每次最多选择 100 名学生', 'warning')
+        return
+      }
       selectedStudents.value.add(student.id)
     }
   } else {
@@ -68,29 +71,13 @@ function selectStudent(student: Student) {
   }
 }
 
-// Score pop animations
-const scorePops = ref<{ id: number; text: string; x: number; y: number }[]>()
-scorePops.value = []
-
-function applyRule(rule: ScoreRule, event?: MouseEvent) {
+function applyRule(rule: ScoreRule) {
   if (batchMode.value) {
     if (selectedStudents.value.size === 0) return
     appStore.batchAddScore(Array.from(selectedStudents.value), rule)
-    showPop(rule.value, event)
   } else if (selectedStudentId.value) {
     appStore.addScore(selectedStudentId.value, rule)
-    showPop(rule.value, event)
   }
-}
-
-function showPop(value: number, event?: MouseEvent) {
-  const id = Date.now()
-  const x = event ? event.clientX : window.innerWidth / 2
-  const y = event ? event.clientY : 200
-  scorePops.value!.push({ id, text: (value > 0 ? '+' : '') + value, x, y })
-  setTimeout(() => {
-    scorePops.value = scorePops.value!.filter(p => p.id !== id)
-  }, 900)
 }
 
 function toggleBatchMode() {
@@ -100,8 +87,22 @@ function toggleBatchMode() {
 }
 
 function selectAll() {
-  filteredStudents.value.forEach(s => selectedStudents.value.add(s.id))
+  const remaining = Math.max(0, 100 - selectedStudents.value.size)
+  const selectableStudents = filteredStudents.value
+    .filter(student => !selectedStudents.value.has(student.id))
+  selectableStudents
+    .slice(0, remaining)
+    .forEach(student => selectedStudents.value.add(student.id))
+  if (selectableStudents.length > remaining) {
+    appStore.addToast('批量积分每次最多选择 100 名学生', 'warning')
+  }
 }
+
+watch(() => appStore.currentClassId, () => {
+  selectedGroupId.value = 'all'
+  selectedStudentId.value = null
+  selectedStudents.value.clear()
+})
 
 // ─── Undo panel ───────────────────────────────────────────
 const showUndo = ref(false)
@@ -115,21 +116,13 @@ function getGroupInfo(groupId: string) {
 </script>
 
 <template>
-  <!-- Score pop overlay -->
-  <Teleport to="body">
-    <div v-for="pop in scorePops" :key="pop.id"
-      class="fixed pointer-events-none font-black text-2xl animate-score-pop z-[9999]"
-      :style="{ left: pop.x + 'px', top: pop.y + 'px', color: pop.text.startsWith('+') ? '#22c55e' : '#ef4444', transform: 'translate(-50%,-50%)' }"
-    >{{ pop.text }}</div>
-  </Teleport>
-
   <div class="space-y-5">
     <!-- Header -->
     <div class="flex items-center justify-between flex-wrap gap-3">
       <div class="flex items-center gap-3">
-        <span v-if="theme.enableEmojis" class="text-4xl animate-bounce-light">⭐</span>
+        <span v-if="theme.enableEmojis" class="text-4xl">⭐</span>
         <h1 class="text-3xl font-bold" :class="theme.titleGradient">学生成长墙</h1>
-        <span v-if="theme.enableEmojis" class="text-4xl animate-bounce-light" style="animation-delay:0.5s">🌟</span>
+        <span v-if="theme.enableEmojis" class="text-4xl">🌟</span>
       </div>
       <div class="flex gap-2">
         <button
@@ -239,22 +232,18 @@ function getGroupInfo(groupId: string) {
             v-for="student in filteredStudents"
             :key="student.id"
             @click="selectStudent(student)"
-            class="relative cursor-pointer transition-all duration-200 hover:-translate-y-1 active:scale-95 overflow-hidden shadow-sm hover:shadow-lg"
+            class="relative cursor-pointer overflow-hidden shadow-sm hover:shadow-md"
             :class="[
+              theme.cardBg,
+              theme.cardBorder,
               theme.cardRounded,
               (selectedStudentId === student.id || selectedStudents.has(student.id)) ? 'ring-2 ring-[#4ecdc4] ring-offset-1' : ''
             ]"
-            style="aspect-ratio: 3/4;"
+            style="aspect-ratio: 3 / 4;"
           >
-            <!-- 卡片背景渐变（无图时显示） -->
-            <div
-              class="absolute inset-0"
-              :style="{ background: `linear-gradient(160deg, ${(getPetById(student.petId??'')?.baseColor??'#ccc')}33 0%, ${(getPetById(student.petId??'')?.baseColor??'#ccc')}11 100%)` }"
-            />
-
-            <!-- 动物展示区：PetAvatar 统一负责真实图片、降级 emoji、装扮、动画和特效 -->
-            <div class="absolute inset-0 flex items-center justify-center p-2" style="bottom: 52px;">
-              <PetAvatar :student="student" size="xl" />
+            <!-- 静态宠物展示区 -->
+            <div class="absolute inset-x-2 top-3 bottom-[3.75rem]">
+              <PetAvatar :student="student" fill />
             </div>
 
             <!-- Batch checkbox -->
@@ -267,30 +256,27 @@ function getGroupInfo(groupId: string) {
             <!-- 小组色点 -->
             <div
               v-if="getGroupInfo(student.groupId)"
-              class="absolute top-2 right-2 w-2.5 h-2.5 rounded-full z-10 shadow"
+              class="absolute top-3 right-3 w-2.5 h-2.5 rounded-full shadow"
               :style="{ background: getGroupInfo(student.groupId)!.color }"
             />
 
-            <!-- 底部信息栏：固定高度，渐变背景 -->
-            <div
-              class="absolute bottom-0 left-0 right-0 z-10 px-2.5 py-2 flex flex-col justify-end gap-2"
-              style="height: 62px; background: linear-gradient(to top, rgba(0,0,0,0.72) 0%, rgba(0,0,0,0.55) 65%, transparent 100%);"
-            >
+            <!-- 静态学生信息 -->
+            <div class="absolute bottom-0 left-0 right-0 space-y-2 border-t border-[#f6ddd3] bg-white px-3 py-2">
               <!-- 第一行：等级 + 阶段名 + 姓名 + 积分 + 徽章 -->
               <div class="flex items-center gap-1.5 min-w-0">
                 <span
                   class="text-xs font-black px-2 py-0.5 rounded-full leading-none shrink-0"
                   :style="{ background: levelColors[appStore.getLevel(student.score)], color: appStore.getLevel(student.score) === 2 ? '#333' : '#fff' }"
                 >Lv.{{ appStore.getLevel(student.score) + 1 }}</span>
-                <span class="text-xs text-white/80 shrink-0">{{ getPetById(student.petId??'')?.stages[appStore.getLevel(student.score)] ?? '' }}</span>
-                <span class="text-sm font-bold text-white truncate flex-1 min-w-0">{{ student.name }}</span>
-                <span class="text-xs font-bold text-yellow-300 shrink-0">{{ student.score }}分</span>
-                <span class="text-xs text-orange-300 shrink-0">🏅×{{ student.badges }}</span>
+                <span class="text-xs text-gray-400 shrink-0">{{ getPetById(student.petId??'')?.stages[appStore.getLevel(student.score)] ?? '' }}</span>
+                <span class="text-sm font-bold text-gray-700 truncate flex-1 min-w-0">{{ student.name }}</span>
+                <span class="text-xs font-bold text-[#4ecdc4] shrink-0">{{ student.score }}分</span>
+                <span class="text-xs text-[#ff9800] shrink-0">🏅×{{ student.badges }}</span>
               </div>
               <!-- 第二行：进度条 -->
-              <div class="w-full h-2 bg-white/25 rounded-full overflow-hidden">
+              <div class="w-full h-2 bg-gray-100 rounded-full overflow-hidden">
                 <div
-                  class="h-full rounded-full transition-all duration-500"
+                  class="h-full rounded-full"
                   :style="{ width: appStore.getProgress(student.score).percent + '%', background: levelColors[appStore.getLevel(student.score)] }"
                 />
               </div>
@@ -361,7 +347,7 @@ function getGroupInfo(groupId: string) {
             <button
               v-for="rule in currentRules"
               :key="rule.id"
-              @click="(e) => applyRule(rule, e)"
+              @click="applyRule(rule)"
               class="w-full flex items-center gap-2 px-3 py-2 rounded-xl transition-all hover:shadow-md active:scale-95 text-sm font-medium"
               :class="rule.value > 0
                 ? 'bg-gradient-to-r from-[#4ecdc4]/10 to-[#95e1d3]/10 hover:from-[#4ecdc4]/20 border border-[#4ecdc4]/30 text-[#2a9d8f]'
@@ -418,9 +404,4 @@ function getGroupInfo(groupId: string) {
     </Transition>
   </div>
 
-  <!-- 宠物升级庆典弹窗 -->
-  <PetLevelUpModal
-    :event="appStore.levelUpEvent"
-    @close="appStore.clearLevelUpEvent()"
-  />
 </template>
